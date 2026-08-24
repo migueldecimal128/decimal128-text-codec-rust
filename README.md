@@ -12,10 +12,12 @@ family. One file, no dependencies, `no_std`.
 ## API
 
 ```rust
-use decimal128_text_codec::{MAX, bid128_to_string, dpd128_to_string, bid128_parse, dpd128_parse};
+use decimal128_text_codec::{
+    MAX_LEN, bid128_to_string, dpd128_to_string, bid128_parse, dpd128_parse,
+};
 
 // bits -> text, into the caller's buffer
-let mut buf = [0u8; MAX];
+let mut buf = [0u8; MAX_LEN];
 let s: &str = bid128_to_string(&mut buf, bits);
 let d: &str = dpd128_to_string(&mut buf, bits);
 
@@ -57,16 +59,17 @@ For the full decimal128 implementation see `decimal128-rust` at
 ## `no_std`
 
 The crate is `#![no_std]` and `#![forbid(unsafe_code)]`, with no allocator at
-all. The renderers write into a caller-owned `[u8; MAX]` and return a borrowed
-`&str` into it, so nothing here allocates, copies or frees; `MAX` is 42, the
-exact bound on a rendered decimal128. Everything is `core`. CI builds it for
-`thumbv7em-none-eabihf` — a bare-metal Cortex-M target with no operating system
-— so the claim is checked rather than asserted.
+all. The renderers write into a caller-owned `[u8; MAX_LEN]` and return a
+borrowed `&str` into it, so nothing here allocates, copies or frees; `MAX_LEN`
+is 42, the exact bound on a rendered decimal128. Everything is `core`. CI builds
+it for `thumbv7em-none-eabihf` — a bare-metal Cortex-M target with no operating
+system — so the claim is checked rather than asserted.
 
-`MAX` lives in the parameter's type, so an undersized buffer is a compile error
-rather than a runtime check, and the renderers keep their cannot-fail property.
-The C and Zig ports take the caller's buffer the same way; Swift, Java, Kotlin
-and C# return owned strings, which is the currency in those languages.
+`MAX_LEN` lives in the parameter's type, so an undersized buffer is a compile
+error rather than a runtime check, and the renderers keep their cannot-fail
+property. The C and Zig ports take the caller's buffer the same way; Swift,
+Java, Kotlin and C# return owned strings, which is the currency in those
+languages.
 
 ## Requirements
 
@@ -94,11 +97,12 @@ the answer:
   purpose, so a translation error surfaces as a panic rather than a wrong answer.
 - Parsing walks the borrowed UTF-8 bytes of the `&str`. Swift copies them into an
   `Array` first; nothing is copied here.
-- The renderers take the caller's buffer — `&mut [u8; MAX]` — and return a
-  borrowed `&str` into it, as the C and Zig ports do, rather than the reference's
-  owned string. `MAX` sits in the parameter's type, so an undersized buffer is a
-  compile error and the renderers keep their cannot-fail property without a
-  length check. It is also what lets the crate carry no allocator.
+- The renderers take the caller's buffer — `&mut [u8; MAX_LEN]` — and return
+  a borrowed `&str` into it, as the C and Zig ports do, rather than the
+  reference's owned string. `MAX_LEN` sits in the parameter's type, so an
+  undersized buffer is a compile error and the renderers keep their cannot-fail
+  property without a length check. It is also what lets the crate carry no
+  allocator.
 
 Internal-consistency claims — the ones unreachable for any input — are spelled
 `verify!` and gated on the `verify` cargo feature, the same contract the full

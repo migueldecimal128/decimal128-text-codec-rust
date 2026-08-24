@@ -24,7 +24,7 @@
 //! ## `no_std`
 //!
 //! The crate is `#![no_std]` with no allocator at all. The renderers write into
-//! a caller-owned `[u8; MAX]` and hand back a borrowed [`str`] into it, so
+//! a caller-owned `[u8; MAX_LEN]` and hand back a borrowed [`str`] into it, so
 //! nothing here allocates, copies or frees. Everything is `core`. Nothing needs
 //! an operating system.
 
@@ -68,10 +68,10 @@
  *  - The finalize and parse chains return tuples rather than writing through
  *    out-parameters, as the Swift and Go ports' do.
  *
- *  - The renderers take the caller's buffer — `&mut [u8; MAX]` — and return a
- *    borrowed `&str` into it, as the C and Zig ports do, rather than the
- *    reference's owned string. `MAX` lives in the parameter's TYPE, so an
- *    undersized buffer is a compile error and the renderers keep their
+ *  - The renderers take the caller's buffer — `&mut [u8; MAX_LEN]` — and
+ *    return a borrowed `&str` into it, as the C and Zig ports do, rather than
+ *    the reference's owned string. `MAX_LEN` lives in the parameter's TYPE, so
+ *    an undersized buffer is a compile error and the renderers keep their
  *    cannot-fail property without a length check. It is also what lets the
  *    crate be `no_std` with no allocator.
  *
@@ -182,8 +182,8 @@ const TEN_POW_18: u64 = 1_000_000_000_000_000_000;
 /// above would quietly consume the slack instead of firing.
 ///
 /// It is public because it is part of the render signature — a caller sizes
-/// their buffer with it, and `&mut [u8; MAX]` puts it in the type.
-pub const MAX: usize = 42;
+/// their buffer with it, and `&mut [u8; MAX_LEN]` puts it in the type.
+pub const MAX_LEN: usize = 42;
 
 /* --------------------------------------------------------------------------
  * The 128-bit boundary
@@ -791,7 +791,7 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
 
 fn inf_string(out: &mut [u8], sign: bool) -> usize {
     let s: &[u8] = if sign { b"-Infinity" } else { b"Infinity" };
-    demand("Infinity fits the buffer", s.len() <= MAX);
+    demand("Infinity fits the buffer", s.len() <= MAX_LEN);
     out[..s.len()].copy_from_slice(s);
     s.len()
 }
@@ -817,13 +817,13 @@ fn nan_string(
         || payload_hi > MAX_PAYLOAD_HI
         || (payload_hi == MAX_PAYLOAD_HI && payload_lo > MAX_PAYLOAD_LO)
     {
-        demand("the bare NaN fits the buffer", base_len <= MAX);
+        demand("the bare NaN fits the buffer", base_len <= MAX_LEN);
         out[..base_len].copy_from_slice(base);
         return base_len;
     }
     let digit_len = calc_digit_len_128(payload_hi, payload_lo);
     let total_len = base_len + digit_len;
-    demand("the NaN payload fits the buffer", total_len <= MAX);
+    demand("the NaN payload fits the buffer", total_len <= MAX_LEN);
     out[..base_len].copy_from_slice(base);
     u128_to_ascii(digit_len, payload_hi, payload_lo, out, base_len);
     total_len
@@ -840,7 +840,7 @@ fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
         let sign_bit_set = i32::from(sign);
         let index = ((-q_exp + (sign_bit_set << 3)) & 0x0F) as usize;
         let s = ZEROS[index];
-        demand("the plain zero fits the buffer", s.len() <= MAX);
+        demand("the plain zero fits the buffer", s.len() <= MAX_LEN);
         out[..s.len()].copy_from_slice(s);
         return s.len();
     }
@@ -855,7 +855,7 @@ fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     let base_len = base.len();
     demand(
         "the exponent-form zero fits the buffer",
-        base_len + 6 <= MAX,
+        base_len + 6 <= MAX_LEN,
     );
     out[..base_len].copy_from_slice(base);
     base_len + append_int(&mut out[base_len..], q_exp)
@@ -875,10 +875,7 @@ fn fnz_to_integer_string(
     );
     let sign_len = usize::from(sign);
     let total_len = sign_len + digit_len;
-    demand(
-        "the integer form fits the buffer",
-        total_len <= MAX,
-    );
+    demand("the integer form fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-'; // overwritten by the first digit when unsigned
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len);
     total_len
@@ -906,10 +903,7 @@ fn fnz_to_decimal_point_string(
     let sign_len = usize::from(sign);
     let decimal_point_len = 1;
     let total_len = sign_len + leading_zero_count + decimal_point_len + digit_len;
-    demand(
-        "the fixed-point form fits the buffer",
-        total_len <= MAX,
-    );
+    demand("the fixed-point form fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-';
     for byte in out.iter_mut().take(leading_zero_count + 1).skip(sign_len) {
         // one extra, overwritten below
@@ -957,10 +951,7 @@ fn fnz_to_normalized_scientific_string(
     };
     let total_len =
         sign_len + decimal_point_len + digit_len + exp_e_len + exp_sign_len + exp_digit_len;
-    demand(
-        "the scientific form fits the buffer",
-        total_len <= MAX,
-    );
+    demand("the scientific form fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-';
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len + decimal_point_len);
     if decimal_point_len > 0 {
@@ -1957,11 +1948,11 @@ fn as_str(bytes: &[u8]) -> &str {
 /// borrows `out`, so nothing is allocated and nothing is copied — it is a view
 /// of the bytes just written, and `out` must outlive it.
 ///
-/// This cannot fail. [`MAX`] is part of the buffer's type, so an undersized one
-/// is a compile error rather than a runtime check, and every 128-bit pattern
-/// renders: canonical encodings produce their natural form, and a non-canonical
-/// BID coefficient (≥ 10³⁴) renders as zero at the encoded exponent per
-/// IEEE 754-2019 §3.5.2.
+/// This cannot fail. [`MAX_LEN`] is part of the buffer's type, so an undersized
+/// one is a compile error rather than a runtime check, and every 128-bit
+/// pattern renders: canonical encodings produce their natural form, and a
+/// non-canonical BID coefficient (≥ 10³⁴) renders as zero at the encoded
+/// exponent per IEEE 754-2019 §3.5.2.
 ///
 /// The output is the GDAS `to-scientific-string` form. It preserves cohort
 /// information — `"1.00"` and `"1.0"` are distinct outputs from distinct
@@ -1969,13 +1960,13 @@ fn as_str(bytes: &[u8]) -> &str {
 /// as in `"6.02E+23"`.
 ///
 /// ```
-/// # use decimal128_text_codec::{MAX, bid128_to_string};
-/// let mut buf = [0u8; MAX];
+/// # use decimal128_text_codec::{MAX_LEN, bid128_to_string};
+/// let mut buf = [0u8; MAX_LEN];
 /// let text = bid128_to_string(&mut buf, 0x3040_0000_0000_0000_0000_0000_0000_007B);
 /// assert_eq!(text, "123");
 /// ```
 #[must_use]
-pub fn bid128_to_string(out: &mut [u8; MAX], bits: u128) -> &str {
+pub fn bid128_to_string(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
     let n = decode_bid128_to_string(out, hi_word(bits), lo_word(bits));
     as_str(&out[..n])
 }
@@ -1989,7 +1980,7 @@ pub fn bid128_to_string(out: &mut [u8; MAX], bits: u128) -> &str {
 /// binary integer. Peer encodings of the same value render to identical text.
 /// This cannot fail.
 #[must_use]
-pub fn dpd128_to_string(out: &mut [u8; MAX], bits: u128) -> &str {
+pub fn dpd128_to_string(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
     let n = decode_dpd128_to_string(out, hi_word(bits), lo_word(bits));
     as_str(&out[..n])
 }
@@ -2022,9 +2013,9 @@ pub fn dpd128_to_string(out: &mut [u8; MAX], bits: u128) -> &str {
 /// same behaviour explicitly.
 ///
 /// ```
-/// # use decimal128_text_codec::{MAX, bid128_parse, bid128_to_string};
+/// # use decimal128_text_codec::{MAX_LEN, bid128_parse, bid128_to_string};
 /// let bits = bid128_parse("6.02E+23").unwrap();
-/// let mut buf = [0u8; MAX];
+/// let mut buf = [0u8; MAX_LEN];
 /// assert_eq!(bid128_to_string(&mut buf, bits), "6.02E+23");
 /// assert!(bid128_parse("1_").is_err());
 /// ```
