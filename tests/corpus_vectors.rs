@@ -26,7 +26,7 @@ This is an integration test, so it links the crate from outside and can reach
 only the public surface — the same surface a consumer has.
 */
 
-use decimal128_text_codec::{QNAN, bid128_parse, bid128_to_string, dpd128_parse, dpd128_to_string};
+use decimal128_text_codec::{MAX, QNAN, bid128_parse, bid128_to_string, dpd128_parse, dpd128_to_string};
 
 // ---------------------------------------------------------------------------
 // The tables
@@ -197,8 +197,9 @@ fn canonical_table_decodes_and_re_encodes() {
 /// Every row: both encodings must render to the expected text, and therefore to
 /// each other.
 fn run_decode_table(rows: &[CorpusRow], label: &str) {
+    let mut buf = [0u8; MAX];
     for row in rows {
-        let bid_text = bid128_to_string(row.bid);
+        let bid_text = bid128_to_string(&mut buf, row.bid);
         assert!(
             bid_text == row.text,
             "{label} line {}: bid #{} rendered <{bid_text}>, expected <{}>",
@@ -206,7 +207,7 @@ fn run_decode_table(rows: &[CorpusRow], label: &str) {
             row.bid_hex(),
             row.text
         );
-        let dpd_text = dpd128_to_string(row.dpd);
+        let dpd_text = dpd128_to_string(&mut buf, row.dpd);
         assert!(
             dpd_text == row.text,
             "{label} line {}: dpd #{} rendered <{dpd_text}>, expected <{}>",

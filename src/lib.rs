@@ -23,10 +23,10 @@
 //!
 //! ## `no_std`
 //!
-//! The crate is `#![no_std]` and needs `alloc` only because the renderers hand
-//! back a [`String`]. Everything else is `core`: the rendering itself runs in a
-//! fixed 64-byte stack buffer, because the longest possible output is 42 bytes.
-//! Nothing here needs an operating system.
+//! The crate is `#![no_std]` with no allocator at all. The renderers write into
+//! a caller-owned `[u8; MAX]` and hand back a borrowed [`str`] into it, so
+//! nothing here allocates, copies or frees. Everything is `core`. Nothing needs
+//! an operating system.
 
 /*
  * decimal128-text-codec-rust
@@ -37,7 +37,7 @@
  * unsigned integer. Both descend from decimal128-text-codec-kotlin, which is the
  * reference implementation for the family. The shape follows them closely enough
  * to be read side by side; where Rust differs, the difference is noted at the
- * point it occurs. The five deliberate ones:
+ * point it occurs. The six deliberate ones:
  *
  *  - The public boundary is `u128`, as in Swift and C#, not the reference's
  *    pair of words. The internals still work in `dw1`/`dw0` `u64` pairs exactly
@@ -68,14 +68,17 @@
  *  - The finalize and parse chains return tuples rather than writing through
  *    out-parameters, as the Swift and Go ports' do.
  *
+ *  - The renderers take the caller's buffer — `&mut [u8; MAX]` — and return a
+ *    borrowed `&str` into it, as the C and Zig ports do, rather than the
+ *    reference's owned string. `MAX` lives in the parameter's TYPE, so an
+ *    undersized buffer is a compile error and the renderers keep their
+ *    cannot-fail property without a length check. It is also what lets the
+ *    crate be `no_std` with no allocator.
+ *
  * Everything reachable from outside is the four functions and the error type at
  * the bottom of this file; the rest is private to the crate.
  */
 
-extern crate alloc;
-
-use alloc::string::String;
-use alloc::vec::Vec;
 use core::fmt;
 
 /* ---------------------------------------------------------------------------
@@ -163,11 +166,24 @@ const SNAN_PATTERN_HI: u64 = 0x7E00_0000_0000_0000;
 const TEN_POW_15: u64 = 1_000_000_000_000_000;
 const TEN_POW_18: u64 = 1_000_000_000_000_000_000;
 
-/// Size of the render buffer. The longest possible output is 42 bytes -- both
-/// `-9.999…E+6144` and the widest plain form reach exactly that -- and this is
-/// that bound with headroom. It never appears in the API: a caller receives a
-/// `String` and sizes nothing.
-const D128TEXT_MAX: usize = 64;
+/// Size of the render buffer, and the exact bound on a rendered decimal128.
+/// The widest scientific form `-9.999…E-6143` is 1 sign, 1 digit, 1 point,
+/// 33 digits, 1 `E`, 1 sign and 4 exponent digits; the widest plain form
+/// `-0.000000999…` is 1 sign, 1 zero, 1 point, 6 leading zeros and 34 digits.
+/// Both reach exactly 42.
+///
+/// The plain form's six leading zeros are pinned by the GDAS rule that selects
+/// it only when the adjusted exponent is at least -6, and the exponent field
+/// cannot exceed four digits inside decimal128's range, so neither number can
+/// drift without the format itself changing.
+///
+/// Every write in the renderers is guarded against this constant, and it is
+/// sized exactly rather than generously: with slack, an error in the arithmetic
+/// above would quietly consume the slack instead of firing.
+///
+/// It is public because it is part of the render signature — a caller sizes
+/// their buffer with it, and `&mut [u8; MAX]` puts it in the type.
+pub const MAX: usize = 42;
 
 /* --------------------------------------------------------------------------
  * The 128-bit boundary
@@ -775,7 +791,7 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
 
 fn inf_string(out: &mut [u8], sign: bool) -> usize {
     let s: &[u8] = if sign { b"-Infinity" } else { b"Infinity" };
-    demand("Infinity fits the buffer", s.len() <= D128TEXT_MAX);
+    demand("Infinity fits the buffer", s.len() <= MAX);
     out[..s.len()].copy_from_slice(s);
     s.len()
 }
@@ -801,13 +817,13 @@ fn nan_string(
         || payload_hi > MAX_PAYLOAD_HI
         || (payload_hi == MAX_PAYLOAD_HI && payload_lo > MAX_PAYLOAD_LO)
     {
-        demand("the bare NaN fits the buffer", base_len <= D128TEXT_MAX);
+        demand("the bare NaN fits the buffer", base_len <= MAX);
         out[..base_len].copy_from_slice(base);
         return base_len;
     }
     let digit_len = calc_digit_len_128(payload_hi, payload_lo);
     let total_len = base_len + digit_len;
-    demand("the NaN payload fits the buffer", total_len <= D128TEXT_MAX);
+    demand("the NaN payload fits the buffer", total_len <= MAX);
     out[..base_len].copy_from_slice(base);
     u128_to_ascii(digit_len, payload_hi, payload_lo, out, base_len);
     total_len
@@ -824,7 +840,7 @@ fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
         let sign_bit_set = i32::from(sign);
         let index = ((-q_exp + (sign_bit_set << 3)) & 0x0F) as usize;
         let s = ZEROS[index];
-        demand("the plain zero fits the buffer", s.len() <= D128TEXT_MAX);
+        demand("the plain zero fits the buffer", s.len() <= MAX);
         out[..s.len()].copy_from_slice(s);
         return s.len();
     }
@@ -839,7 +855,7 @@ fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     let base_len = base.len();
     demand(
         "the exponent-form zero fits the buffer",
-        base_len + 6 <= D128TEXT_MAX,
+        base_len + 6 <= MAX,
     );
     out[..base_len].copy_from_slice(base);
     base_len + append_int(&mut out[base_len..], q_exp)
@@ -861,7 +877,7 @@ fn fnz_to_integer_string(
     let total_len = sign_len + digit_len;
     demand(
         "the integer form fits the buffer",
-        total_len <= D128TEXT_MAX,
+        total_len <= MAX,
     );
     out[0] = b'-'; // overwritten by the first digit when unsigned
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len);
@@ -892,7 +908,7 @@ fn fnz_to_decimal_point_string(
     let total_len = sign_len + leading_zero_count + decimal_point_len + digit_len;
     demand(
         "the fixed-point form fits the buffer",
-        total_len <= D128TEXT_MAX,
+        total_len <= MAX,
     );
     out[0] = b'-';
     for byte in out.iter_mut().take(leading_zero_count + 1).skip(sign_len) {
@@ -943,7 +959,7 @@ fn fnz_to_normalized_scientific_string(
         sign_len + decimal_point_len + digit_len + exp_e_len + exp_sign_len + exp_digit_len;
     demand(
         "the scientific form fits the buffer",
-        total_len <= D128TEXT_MAX,
+        total_len <= MAX,
     );
     out[0] = b'-';
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len + decimal_point_len);
@@ -1923,8 +1939,13 @@ fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64
 /// formats.
 pub const QNAN: u128 = (QNAN_PATTERN_HI as u128) << 64;
 
-fn render(n: usize, buf: &[u8; D128TEXT_MAX]) -> String {
-    match String::from_utf8(Vec::from(&buf[..n])) {
+/// View the written prefix of a render buffer as text.
+///
+/// The renderers write ASCII only, so this cannot fail; the check stands where
+/// `String::from_utf8` stood when the renderers returned an owned string, and
+/// keeps the crate free of `unsafe`.
+fn as_str(bytes: &[u8]) -> &str {
+    match core::str::from_utf8(bytes) {
         Ok(s) => s,
         Err(_) => impossible("the renderer wrote a non-ASCII byte"),
     }
@@ -1932,9 +1953,15 @@ fn render(n: usize, buf: &[u8; D128TEXT_MAX]) -> String {
 
 /// Render a BID128 encoding as a decimal character sequence.
 ///
-/// This cannot fail. Every 128-bit pattern renders: canonical encodings produce
-/// their natural form, and a non-canonical BID coefficient (≥ 10³⁴) renders as
-/// zero at the encoded exponent per IEEE 754-2019 §3.5.2.
+/// Writes the text into `out` and returns the part written. The returned `&str`
+/// borrows `out`, so nothing is allocated and nothing is copied — it is a view
+/// of the bytes just written, and `out` must outlive it.
+///
+/// This cannot fail. [`MAX`] is part of the buffer's type, so an undersized one
+/// is a compile error rather than a runtime check, and every 128-bit pattern
+/// renders: canonical encodings produce their natural form, and a non-canonical
+/// BID coefficient (≥ 10³⁴) renders as zero at the encoded exponent per
+/// IEEE 754-2019 §3.5.2.
 ///
 /// The output is the GDAS `to-scientific-string` form. It preserves cohort
 /// information — `"1.00"` and `"1.0"` are distinct outputs from distinct
@@ -1942,28 +1969,29 @@ fn render(n: usize, buf: &[u8; D128TEXT_MAX]) -> String {
 /// as in `"6.02E+23"`.
 ///
 /// ```
-/// # use decimal128_text_codec::bid128_to_string;
-/// assert_eq!(bid128_to_string(0x3040_0000_0000_0000_0000_0000_0000_007B), "123");
+/// # use decimal128_text_codec::{MAX, bid128_to_string};
+/// let mut buf = [0u8; MAX];
+/// let text = bid128_to_string(&mut buf, 0x3040_0000_0000_0000_0000_0000_0000_007B);
+/// assert_eq!(text, "123");
 /// ```
 #[must_use]
-pub fn bid128_to_string(bits: u128) -> String {
-    let mut buf = [0u8; D128TEXT_MAX];
-    let n = decode_bid128_to_string(&mut buf, hi_word(bits), lo_word(bits));
-    render(n, &buf)
+pub fn bid128_to_string(out: &mut [u8; MAX], bits: u128) -> &str {
+    let n = decode_bid128_to_string(out, hi_word(bits), lo_word(bits));
+    as_str(&out[..n])
 }
 
 /// Render a DPD128 encoding as a decimal character sequence.
 ///
-/// The peer of [`bid128_to_string`]: DPD128 carries the same sign, the same
-/// 14-bit biased exponent and the same 34-digit coefficient, and differs only in
-/// storing that coefficient as a leading digit plus eleven 10-bit declets rather
-/// than as a binary integer. Peer encodings of the same value render to
-/// identical text. This cannot fail.
+/// The peer of [`bid128_to_string`], with the same caller-owned buffer and the
+/// same borrowed return: DPD128 carries the same sign, the same 14-bit biased
+/// exponent and the same 34-digit coefficient, and differs only in storing that
+/// coefficient as a leading digit plus eleven 10-bit declets rather than as a
+/// binary integer. Peer encodings of the same value render to identical text.
+/// This cannot fail.
 #[must_use]
-pub fn dpd128_to_string(bits: u128) -> String {
-    let mut buf = [0u8; D128TEXT_MAX];
-    let n = decode_dpd128_to_string(&mut buf, hi_word(bits), lo_word(bits));
-    render(n, &buf)
+pub fn dpd128_to_string(out: &mut [u8; MAX], bits: u128) -> &str {
+    let n = decode_dpd128_to_string(out, hi_word(bits), lo_word(bits));
+    as_str(&out[..n])
 }
 
 /// Parse a decimal character sequence into a BID128 encoding.
@@ -1994,9 +2022,10 @@ pub fn dpd128_to_string(bits: u128) -> String {
 /// same behaviour explicitly.
 ///
 /// ```
-/// # use decimal128_text_codec::{bid128_parse, bid128_to_string};
+/// # use decimal128_text_codec::{MAX, bid128_parse, bid128_to_string};
 /// let bits = bid128_parse("6.02E+23").unwrap();
-/// assert_eq!(bid128_to_string(bits), "6.02E+23");
+/// let mut buf = [0u8; MAX];
+/// assert_eq!(bid128_to_string(&mut buf, bits), "6.02E+23");
 /// assert!(bid128_parse("1_").is_err());
 /// ```
 pub fn bid128_parse(text: &str) -> Result<u128, ParseError> {
