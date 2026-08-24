@@ -789,12 +789,27 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
  * (sign, qExp, coefficient) and hand it here.
  * ------------------------------------------------------------------------ */
 
+/// None of the optional leading characters live in the string data. The sign,
+/// and the `s` that marks a signaling NaN, are each written unconditionally and
+/// then overwritten by whatever follows when they are not wanted -- the trick
+/// [`fnz_to_integer_string`] already uses for the sign. That holds only because
+/// every optional character is a single byte at the front of the form: a
+/// spelling that ever put one elsewhere would render wrong rather than fail to
+/// compile. The one exception is written where it happens, in [`zer_string`]'s
+/// exponent form, where the byte is a TRAILING `+` overwritten by
+/// [`append_int`]'s own `-`.
+const INFINITY_TEXT: &[u8] = b"Infinity";
+
 fn inf_string(out: &mut [u8], sign: bool) -> usize {
-    let s: &[u8] = if sign { b"-Infinity" } else { b"Infinity" };
-    demand("Infinity fits the buffer", s.len() <= MAX_LEN);
-    out[..s.len()].copy_from_slice(s);
-    s.len()
+    let sign_len = usize::from(sign);
+    let total_len = sign_len + INFINITY_TEXT.len();
+    demand("Infinity fits the buffer", total_len <= MAX_LEN);
+    out[0] = b'-'; // overwritten by the b'I' when unsigned
+    out[sign_len..total_len].copy_from_slice(INFINITY_TEXT);
+    total_len
 }
+
+const NAN_TEXT: &[u8] = b"NaN";
 
 fn nan_string(
     out: &mut [u8],
@@ -803,14 +818,12 @@ fn nan_string(
     payload_hi: u64,
     payload_lo: u64,
 ) -> usize {
-    let base: &[u8] = if !is_signaling {
-        if sign { b"-NaN" } else { b"NaN" }
-    } else if sign {
-        b"-sNaN"
-    } else {
-        b"sNaN"
-    };
-    let base_len = base.len();
+    let sign_len = usize::from(sign);
+    let s_len = usize::from(is_signaling);
+    let word_off = sign_len + s_len;
+    let base_len = word_off + NAN_TEXT.len();
+    out[0] = b'-'; // overwritten by the b's' or the b'N' when unsigned
+    out[sign_len] = b's'; // overwritten by the b'N' when quiet
 
     if (payload_hi | payload_lo) == 0
         // non-canonical payload, IEEE 754-2019 3.5.2 c) 2) -- read as zero
@@ -818,13 +831,13 @@ fn nan_string(
         || (payload_hi == MAX_PAYLOAD_HI && payload_lo > MAX_PAYLOAD_LO)
     {
         demand("the bare NaN fits the buffer", base_len <= MAX_LEN);
-        out[..base_len].copy_from_slice(base);
+        out[word_off..base_len].copy_from_slice(NAN_TEXT);
         return base_len;
     }
     let digit_len = calc_digit_len_128(payload_hi, payload_lo);
     let total_len = base_len + digit_len;
     demand("the NaN payload fits the buffer", total_len <= MAX_LEN);
-    out[..base_len].copy_from_slice(base);
+    out[word_off..base_len].copy_from_slice(NAN_TEXT);
     u128_to_ascii(digit_len, payload_hi, payload_lo, out, base_len);
     total_len
 }
@@ -841,6 +854,9 @@ fn nan_string(
 /// anywhere else would render wrong rather than fail to compile.
 const PLAIN_ZERO: &[u8] = b"0.000000";
 
+/// The exponent form's base. The `+` is not here: see [`zer_string`] below.
+const ZERO_EXP_TEXT: &[u8] = b"0E";
+
 fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     if (-6..=0).contains(&q_exp) {
         let k = (-q_exp) as usize;
@@ -852,20 +868,24 @@ fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
         out[sign_len..total_len].copy_from_slice(&PLAIN_ZERO[..zero_len]);
         return total_len;
     }
-    let base: &[u8] = if q_exp > 0 {
-        if sign { b"-0E+" } else { b"0E+" }
-    } else if sign {
-        // q_exp is negative and prints its own sign
-        b"-0E"
-    } else {
-        b"0E"
-    };
-    let base_len = base.len();
+    let sign_len = usize::from(sign);
+    let word_len = ZERO_EXP_TEXT.len();
+    // A positive exponent needs an explicit `+`; a negative one prints its own
+    // `-` from append_int. Write the `+` unconditionally and let append_int land
+    // on top of it when q_exp < 0 -- the same discipline as the leading sign,
+    // pointed the other way. It is correct only because append_int emits a `-`
+    // for a negative value and emits nothing for a positive one, and because the
+    // plain form above has already taken every q_exp in [-6, 0], so this branch
+    // never sees zero.
+    let plus_len = usize::from(q_exp > 0);
+    let base_len = sign_len + word_len + plus_len;
     demand(
         "the exponent-form zero fits the buffer",
         base_len + 6 <= MAX_LEN,
     );
-    out[..base_len].copy_from_slice(base);
+    out[0] = b'-'; // overwritten by the b'0' when unsigned
+    out[sign_len..sign_len + word_len].copy_from_slice(ZERO_EXP_TEXT);
+    out[sign_len + word_len] = b'+'; // overwritten by append_int's b'-' when q_exp < 0
     base_len + append_int(&mut out[base_len..], q_exp)
 }
 
