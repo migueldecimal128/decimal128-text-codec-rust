@@ -829,20 +829,28 @@ fn nan_string(
     total_len
 }
 
-#[rustfmt::skip]
-static ZEROS: [&[u8]; 16] = [
-    b"0", b"0.0", b"0.00", b"0.000", b"0.0000", b"0.00000", b"0.000000", b"",
-    b"-0", b"-0.0", b"-0.00", b"-0.000", b"-0.0000", b"-0.00000", b"-0.000000", b"",
-];
+/// Every plain-form zero is a prefix of this literal. `k = -q_exp` is the count
+/// of zeros after the radix point, so `k = 0` renders `"0"` with no radix point
+/// at all and `k >= 1` renders `"0."` followed by `k` zeros -- lengths 1 and
+/// `k + 2`.
+///
+/// The sign is not in the data. It is written into `out[0]` unconditionally and
+/// overwritten by the `0` when the value is positive, the same trick the finite
+/// renderers use. That works because the negative spelling of every form here is
+/// the positive spelling with one byte in front; a form that ever put the sign
+/// anywhere else would render wrong rather than fail to compile.
+const PLAIN_ZERO: &[u8] = b"0.000000";
 
 fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     if (-6..=0).contains(&q_exp) {
-        let sign_bit_set = i32::from(sign);
-        let index = ((-q_exp + (sign_bit_set << 3)) & 0x0F) as usize;
-        let s = ZEROS[index];
-        demand("the plain zero fits the buffer", s.len() <= MAX_LEN);
-        out[..s.len()].copy_from_slice(s);
-        return s.len();
+        let k = (-q_exp) as usize;
+        let zero_len = if k == 0 { 1 } else { k + 2 };
+        let sign_len = usize::from(sign);
+        let total_len = sign_len + zero_len;
+        demand("the plain zero fits the buffer", total_len <= MAX_LEN);
+        out[0] = b'-'; // overwritten by the b'0' when unsigned
+        out[sign_len..total_len].copy_from_slice(&PLAIN_ZERO[..zero_len]);
+        return total_len;
     }
     let base: &[u8] = if q_exp > 0 {
         if sign { b"-0E+" } else { b"0E+" }
