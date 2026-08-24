@@ -1,0 +1,74 @@
+name: ci
+
+# The codec is one file with no dependencies, so CI exists to cover what a
+# developer's host does not: the other operating systems, the build with the
+# internal assertions armed -- the only configuration in which a verify! can fail
+# at all -- and a target with no operating system underneath it, which is what
+# makes the no_std claim checkable rather than asserted.
+#
+# The conformance vectors come from decimal128-resources, mounted as a submodule
+# at <repo>/resources, so every checkout needs `submodules: recursive` -- without
+# it the tests fail loudly naming the fix rather than silently skipping the
+# corpus. The full 84,783-row canonical table comes with it and runs everywhere.
+#
+# The toolchain is whatever rust-toolchain.toml pins; dtolnay/rust-toolchain
+# honours that file, so a new stable release cannot turn this red on its own.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: rust on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      - name: Test (assertions armed)
+        run: cargo test --features verify
+
+  # The whole point of no_std: a target with no OS, no std and no allocator
+  # provided. The library is a rlib, so `alloc` needs no allocator to be
+  # registered -- that is the consumer's job -- and this job fails the moment
+  # anything in the crate reaches for std.
+  no_std:
+    name: bare-metal build (thumbv7em-none-eabihf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # `rustup target add` rather than the action's `targets:` input, because
+      # rust-toolchain.toml pins the toolchain cargo actually uses: the action
+      # installs whatever stable is today, and the target has to land on the
+      # PINNED toolchain, which is the active one inside the checkout.
+      - name: Add the bare-metal target
+        run: rustup target add thumbv7em-none-eabihf
+
+      - name: Build
+        run: cargo build --target thumbv7em-none-eabihf
+
+      - name: Build (assertions armed)
+        run: cargo build --target thumbv7em-none-eabihf --features verify

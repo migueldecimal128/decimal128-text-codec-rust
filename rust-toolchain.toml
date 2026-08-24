@@ -1,0 +1,11 @@
+# Pin the toolchain so a new stable release cannot turn CI red on a day nobody
+# touched the code -- the same pin, and the same reason, as decimal128-rust:
+# stable 1.98.0 strengthened a clippy lint and broke the next push, which was a
+# pure file rename.
+#
+# Bumping: raise `channel`, run `cargo clippy --all-targets --all-features --
+# -D warnings` plus `cargo fmt --check` locally, fix what the new release flags,
+# and land that as its own commit.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

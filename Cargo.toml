@@ -1,0 +1,19 @@
+[package]
+name = "decimal128-text-codec-rust"
+version = "0.9.0"
+edition = "2024"
+license = "MIT"
+description = "Thin BID128/DPD128 <-> text codec for IEEE 754-2019 decimal128. One file, four functions, no_std + alloc."
+repository = "https://github.com/migueldecimal128/decimal128-text-codec-rust"
+rust-version = "1.85"
+
+[lib]
+name = "decimal128_text_codec"
+
+[features]
+# Compile-gated internal state assertions. Off by default: a consumer compiles
+# this crate into their own program and must not take a panic inside a library
+# on data they do not control. CI runs the whole corpus with it on.
+verify = []
+
+[dependencies]
