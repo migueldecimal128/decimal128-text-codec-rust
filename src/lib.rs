@@ -70,52 +70,6 @@
 //! `core`; nothing needs an operating system.
 
 /*
- * decimal128-text-codec-rust
- *
- * Ported from decimal128-text-codec-c (decimal128_text_codec.c @ 3d78a7f) for
- * structure, with decimal128-text-codec-swift for the boundary — Swift answered
- * first what the file looks like in a language that has a native 128-bit
- * unsigned integer. Both descend from decimal128-text-codec-kotlin, which is the
- * reference implementation for the family. The shape follows them closely enough
- * to be read side by side; where Rust differs, the difference is noted at the
- * point it occurs. The six deliberate ones:
- *
- *  - The public boundary is `u128`, as in Swift and C#, not the reference's
- *    pair of words. The internals still work in `dw1`/`dw0` `u64` pairs exactly
- *    as the reference does: the split happens once on entry, the join once on
- *    exit. That is what keeps the six files readable against each other.
- *
- *  - Parse returns `Result<u128, ParseError>`. The family's contract is that
- *    the encoding is ALWAYS written — the canonical positive quiet NaN on
- *    failure — so that a caller who ignores the error still holds a legal
- *    IEEE 754-2019 datum. Rust enforces that statically instead: `Result` is
- *    `#[must_use]` and the value cannot be read without handling the error, so
- *    there is no ignoring caller to protect. The one thing it costs is the
- *    corpus assertion that the qNaN was written; see tests/corpus_vectors.rs.
- *
- *  - Rust panics on overflow in debug builds and wraps in release, so every
- *    site the reference relies on wrapping is spelled `wrapping_add` /
- *    `wrapping_mul` here, and each carries a note saying why the wrap is the
- *    intended arithmetic. Every other site is left checked on purpose, so a
- *    translation error surfaces as a panic rather than as a wrong answer. The
- *    Swift port took the other road and spells every operator `&+` / `&*`.
- *
- *  - The widening multiply is `u128` arithmetic rather than the reference's
- *    four-partial-product decomposition, which exists only because the JVM has
- *    no unsigned 64-bit multiply-high. The C port's three-way `__int128` /
- *    `__umulh` / synthesize-from-limbs split has no analogue either: Rust has
- *    `u128` on every target.
- *
- *  - The finalize and parse chains return tuples rather than writing through
- *    out-parameters, as the Swift and Go ports' do.
- *
- *  - The renderers take the caller's buffer — `&mut [u8; MAX_LEN]` — and
- *    return a borrowed `&str` into it, as the C and Zig ports do, rather than
- *    the reference's owned string. `MAX_LEN` lives in the parameter's TYPE, so
- *    an undersized buffer is a compile error and the renderers keep their
- *    cannot-fail property without a length check. It is also what lets the
- *    crate be `no_std` with no allocator.
- *
  * Everything reachable from outside is the four functions and the error type at
  * the bottom of this file; the rest is private to the crate.
  */
