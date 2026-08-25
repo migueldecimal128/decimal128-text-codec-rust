@@ -890,13 +890,7 @@ fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
 }
 
 /// `q_exp == 0`: a plain integer, no radix point and no exponent.
-fn fnz_to_integer_ascii(
-    out: &mut [u8],
-    sign: bool,
-    digit_len: usize,
-    dw1: u64,
-    dw0: u64,
-) -> usize {
+fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, dw0: u64) -> usize {
     verify!(
         "a finite nonzero value has at least one digit",
         digit_len > 0
