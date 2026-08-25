@@ -620,8 +620,6 @@ const M_U64_DIV_1E4: u64 = 0x346D_C5D6_3886_594B;
 const S_U64_DIV_1E4: u32 = 11;
 const MASK32: u64 = 0xFFFF_FFFF;
 
-const MAGIC_DIV_1E8: u64 = M_U64_DIV_1E8;
-
 /*
  * Render exactly 8 decimal digits of `dw`, ending at `off_maxx`. Zero-pads. The
  * caller guarantees dw < 10^8 and that the 8 bytes are inside the buffer.
@@ -725,13 +723,13 @@ fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8],
     let mut ich = off + digit_print_count;
     let mut remaining_digit_count = digit_print_count;
     while dw1_t != 0 {
-        let q2 = mulhi64(dw1_t, MAGIC_DIV_1E8) >> S_U64_DIV_1E8;
+        let q2 = mulhi64(dw1_t, M_U64_DIV_1E8) >> S_U64_DIV_1E8;
         let r2 = dw1_t - (q2 * 100_000_000);
         let s2 = (r2 << 32) | (dw0_t >> 32);
-        let q1 = mulhi64(s2, MAGIC_DIV_1E8) >> S_U64_DIV_1E8;
+        let q1 = mulhi64(s2, M_U64_DIV_1E8) >> S_U64_DIV_1E8;
         let r1 = s2 - (q1 * 100_000_000);
         let s1 = (r1 << 32) | (dw0_t & MASK32);
-        let q0 = mulhi64(s1, MAGIC_DIV_1E8) >> S_U64_DIV_1E8;
+        let q0 = mulhi64(s1, M_U64_DIV_1E8) >> S_U64_DIV_1E8;
         let r0 = s1 - (q0 * 100_000_000);
         dw0_t = (q1 << 32) + q0;
         dw1_t = q2;
@@ -740,7 +738,7 @@ fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8],
         remaining_digit_count -= 8;
     }
     while remaining_digit_count >= 8 {
-        let t0 = mulhi64(dw0_t, MAGIC_DIV_1E8) >> S_U64_DIV_1E8;
+        let t0 = mulhi64(dw0_t, M_U64_DIV_1E8) >> S_U64_DIV_1E8;
         let r0 = dw0_t - (t0 * 100_000_000);
         dw0_t = t0;
         render8_digits_before_index(r0, ascii, ich);
