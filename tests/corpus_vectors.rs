@@ -27,7 +27,7 @@ only the public surface — the same surface a consumer has.
 */
 
 use decimal128_text_codec::{
-    MAX_LEN, QNAN, bid128_parse, bid128_to_string, dpd128_parse, dpd128_to_string,
+    MAX_LEN, QNAN, bid128_parse, bid128_to_ascii, dpd128_parse, dpd128_to_ascii,
 };
 
 // ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ fn canonical_table_decodes_and_re_encodes() {
 fn run_decode_table(rows: &[CorpusRow], label: &str) {
     let mut buf = [0u8; MAX_LEN];
     for row in rows {
-        let bid_text = bid128_to_string(&mut buf, row.bid);
+        let bid_text = bid128_to_ascii(&mut buf, row.bid);
         assert!(
             bid_text == row.text,
             "{label} line {}: bid #{} rendered <{bid_text}>, expected <{}>",
@@ -209,7 +209,7 @@ fn run_decode_table(rows: &[CorpusRow], label: &str) {
             row.bid_hex(),
             row.text
         );
-        let dpd_text = dpd128_to_string(&mut buf, row.dpd);
+        let dpd_text = dpd128_to_ascii(&mut buf, row.dpd);
         assert!(
             dpd_text == row.text,
             "{label} line {}: dpd #{} rendered <{dpd_text}>, expected <{}>",

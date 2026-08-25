@@ -793,15 +793,15 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
 /// None of the optional leading characters live in the string data. The sign,
 /// and the `s` that marks a signaling NaN, are each written unconditionally and
 /// then overwritten by whatever follows when they are not wanted -- the trick
-/// [`fnz_to_integer_string`] already uses for the sign. That holds only because
+/// [`fnz_to_integer_ascii`] already uses for the sign. That holds only because
 /// every optional character is a single byte at the front of the form: a
 /// spelling that ever put one elsewhere would render wrong rather than fail to
-/// compile. The one exception is written where it happens, in [`zer_string`]'s
+/// compile. The one exception is written where it happens, in [`zer_ascii`]'s
 /// exponent form, where the byte is a TRAILING `+` overwritten by
 /// [`append_int`]'s own `-`.
 const INFINITY_TEXT: &[u8] = b"Infinity";
 
-fn inf_string(out: &mut [u8], sign: bool) -> usize {
+fn inf_ascii(out: &mut [u8], sign: bool) -> usize {
     let sign_len = usize::from(sign);
     let total_len = sign_len + INFINITY_TEXT.len();
     demand("Infinity fits the buffer", total_len <= MAX_LEN);
@@ -812,7 +812,7 @@ fn inf_string(out: &mut [u8], sign: bool) -> usize {
 
 const NAN_TEXT: &[u8] = b"NaN";
 
-fn nan_string(
+fn nan_ascii(
     out: &mut [u8],
     sign: bool,
     is_signaling: bool,
@@ -855,10 +855,10 @@ fn nan_string(
 /// anywhere else would render wrong rather than fail to compile.
 const PLAIN_ZERO: &[u8] = b"0.000000";
 
-/// The exponent form's base. The `+` is not here: see [`zer_string`] below.
+/// The exponent form's base. The `+` is not here: see [`zer_ascii`] below.
 const ZERO_EXP_TEXT: &[u8] = b"0E";
 
-fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
+fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     if (-6..=0).contains(&q_exp) {
         let k = (-q_exp) as usize;
         let zero_len = if k == 0 { 1 } else { k + 2 };
@@ -891,7 +891,7 @@ fn zer_string(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
 }
 
 /// `q_exp == 0`: a plain integer, no radix point and no exponent.
-fn fnz_to_integer_string(
+fn fnz_to_integer_ascii(
     out: &mut [u8],
     sign: bool,
     digit_len: usize,
@@ -914,7 +914,7 @@ fn fnz_to_integer_string(
  * Fixed-point form: leading zeros, then the coefficient digits shifted right by
  * one position to make room for the radix point.
  */
-fn fnz_to_decimal_point_string(
+fn fnz_to_decimal_point_ascii(
     out: &mut [u8],
     sign: bool,
     q_exp: i32,
@@ -950,7 +950,7 @@ fn fnz_to_decimal_point_string(
  * Normalized scientific form. The exponent sign is always written, per the GDAS
  * to-scientific-string form: 1.234E+5, never 1.234E5.
  */
-fn fnz_to_normalized_scientific_string(
+fn fnz_to_normalized_scientific_ascii(
     out: &mut [u8],
     sign: bool,
     q_exp: i32,
@@ -999,16 +999,16 @@ fn fnz_to_normalized_scientific_string(
  * fixed-point when the adjusted exponent is at least -6, scientific
  * otherwise -- the GDAS auto-select rule.
  */
-fn fnz_string(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
+fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
     let digit_len = calc_digit_len_128(dw1, dw0);
     let e_exp = q_exp + (digit_len as i32 - 1);
     if q_exp == 0 {
-        return fnz_to_integer_string(out, sign, digit_len, dw1, dw0);
+        return fnz_to_integer_ascii(out, sign, digit_len, dw1, dw0);
     }
     if q_exp <= 0 && e_exp >= -6 {
-        return fnz_to_decimal_point_string(out, sign, q_exp, digit_len, dw1, dw0);
+        return fnz_to_decimal_point_ascii(out, sign, q_exp, digit_len, dw1, dw0);
     }
-    fnz_to_normalized_scientific_string(out, sign, q_exp, digit_len, dw1, dw0)
+    fnz_to_normalized_scientific_ascii(out, sign, q_exp, digit_len, dw1, dw0)
 }
 
 /* --------------------------------------------------------------------------
@@ -1016,7 +1016,7 @@ fn fnz_string(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usi
  * ------------------------------------------------------------------------ */
 
 /// Unpack a BID128 encoding, per IEEE 754-2019 3.5.2, and render it.
-fn decode_bid128_to_string(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usize {
+fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usize {
     verify!(
         "the field widths tile the encoding",
         1 + W5 + T_WIDTH == 128
@@ -1042,14 +1042,14 @@ fn decode_bid128_to_string(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> us
         q_exp = biased_exponent_e - BIAS;
         coeff_hi = 8 + u64::from(combination & 1);
     } else if (combination >> (W5 - 5)) == 0x1E {
-        return inf_string(out, sign);
+        return inf_ascii(out, sign);
     } else {
         verify!(
             "the remaining combination field is the NaN pattern",
             (combination >> (W5 - 5)) == 0x1F
         );
         let is_signaling = ((combination >> (W5 - 6)) & 1) != 0;
-        return nan_string(out, sign, is_signaling, coeff_t_hi, bid128_lo);
+        return nan_ascii(out, sign, is_signaling, coeff_t_hi, bid128_lo);
     }
 
     let dw1 = (coeff_hi << (T_WIDTH - 64)) | coeff_t_hi;
@@ -1061,13 +1061,13 @@ fn decode_bid128_to_string(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> us
         || dw1 > MAXX_COEFF_34_HI
         || (dw1 == MAXX_COEFF_34_HI && dw0 >= MAXX_COEFF_34_LO)
     {
-        return zer_string(out, sign, q_exp);
+        return zer_ascii(out, sign, q_exp);
     }
-    fnz_string(out, sign, q_exp, dw1, dw0)
+    fnz_ascii(out, sign, q_exp, dw1, dw0)
 }
 
 /// Unpack a DPD128 encoding and hand the pieces to the same renderers.
-fn decode_dpd128_to_string(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usize {
+fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usize {
     const W: u32 = 12; // exponent continuation width
 
     let sign = (dpd128_hi & SIGN_BIT) != 0;
@@ -1091,7 +1091,7 @@ fn decode_dpd128_to_string(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> us
         q_exp = ((exp_msb << W) | exp_continuation) - BIAS;
         d0 = 8 + u64::from((combination >> W) & 0x1);
     } else if (combination >> (W5 - 5)) == 0x1E {
-        return inf_string(out, sign);
+        return inf_ascii(out, sign);
     } else {
         verify!(
             "the remaining combination field is the NaN pattern",
@@ -1123,12 +1123,12 @@ fn decode_dpd128_to_string(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> us
     }
 
     if is_nan {
-        return nan_string(out, sign, is_signaling, dw1, dw0);
+        return nan_ascii(out, sign, is_signaling, dw1, dw0);
     }
     if (dw1 | dw0) == 0 {
-        return zer_string(out, sign, q_exp);
+        return zer_ascii(out, sign, q_exp);
     }
-    fnz_string(out, sign, q_exp, dw1, dw0)
+    fnz_ascii(out, sign, q_exp, dw1, dw0)
 }
 
 /* --------------------------------------------------------------------------
@@ -1989,28 +1989,28 @@ fn as_str(bytes: &[u8]) -> &str {
 /// as in `"6.02E+23"`.
 ///
 /// ```
-/// # use decimal128_text_codec::{MAX_LEN, bid128_to_string};
+/// # use decimal128_text_codec::{MAX_LEN, bid128_to_ascii};
 /// let mut buf = [0u8; MAX_LEN];
-/// let text = bid128_to_string(&mut buf, 0x3040_0000_0000_0000_0000_0000_0000_007B);
+/// let text = bid128_to_ascii(&mut buf, 0x3040_0000_0000_0000_0000_0000_0000_007B);
 /// assert_eq!(text, "123");
 /// ```
 #[must_use]
-pub fn bid128_to_string(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
-    let n = decode_bid128_to_string(out, hi_word(bits), lo_word(bits));
+pub fn bid128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
+    let n = decode_bid128_to_ascii(out, hi_word(bits), lo_word(bits));
     as_str(&out[..n])
 }
 
 /// Render a DPD128 encoding as a decimal character sequence.
 ///
-/// The peer of [`bid128_to_string`], with the same caller-owned buffer and the
+/// The peer of [`bid128_to_ascii`], with the same caller-owned buffer and the
 /// same borrowed return: DPD128 carries the same sign, the same 14-bit biased
 /// exponent and the same 34-digit coefficient, and differs only in storing that
 /// coefficient as a leading digit plus eleven 10-bit declets rather than as a
 /// binary integer. Peer encodings of the same value render to identical text.
 /// This cannot fail.
 #[must_use]
-pub fn dpd128_to_string(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
-    let n = decode_dpd128_to_string(out, hi_word(bits), lo_word(bits));
+pub fn dpd128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
+    let n = decode_dpd128_to_ascii(out, hi_word(bits), lo_word(bits));
     as_str(&out[..n])
 }
 
@@ -2042,10 +2042,10 @@ pub fn dpd128_to_string(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 /// same behaviour explicitly.
 ///
 /// ```
-/// # use decimal128_text_codec::{MAX_LEN, bid128_parse, bid128_to_string};
+/// # use decimal128_text_codec::{MAX_LEN, bid128_parse, bid128_to_ascii};
 /// let bits = bid128_parse("6.02E+23").unwrap();
 /// let mut buf = [0u8; MAX_LEN];
-/// assert_eq!(bid128_to_string(&mut buf, bits), "6.02E+23");
+/// assert_eq!(bid128_to_ascii(&mut buf, bits), "6.02E+23");
 /// assert!(bid128_parse("1_").is_err());
 /// ```
 pub fn bid128_parse(text: &str) -> Result<u128, ParseError> {

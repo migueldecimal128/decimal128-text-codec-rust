@@ -13,13 +13,13 @@ family. One file, no dependencies, `no_std`.
 
 ```rust
 use decimal128_text_codec::{
-    MAX_LEN, bid128_to_string, dpd128_to_string, bid128_parse, dpd128_parse,
+    MAX_LEN, bid128_to_ascii, dpd128_to_ascii, bid128_parse, dpd128_parse,
 };
 
 // bits -> text, into the caller's buffer
 let mut buf = [0u8; MAX_LEN];
-let s: &str = bid128_to_string(&mut buf, bits);
-let d: &str = dpd128_to_string(&mut buf, bits);
+let s: &str = bid128_to_ascii(&mut buf, bits);
+let d: &str = dpd128_to_ascii(&mut buf, bits);
 
 // text -> bits
 let bits = bid128_parse("1.23E+45")?;
