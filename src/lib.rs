@@ -1403,6 +1403,7 @@ fn finalize_underflow_region(
     dw0: u64,
     residue: i32,
 ) -> (u64, u64) {
+    // IEEE 754-2019 7.5 Underflow -- the subnormal region
     verify!("the exponent is below the minimum", q_exp < Q_MIN);
     let truncation_needed = (Q_MIN - q_exp) as usize;
     let digit_len = calc_digit_len_128(dw1, dw0);
