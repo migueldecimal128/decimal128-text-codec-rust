@@ -62,7 +62,7 @@
 //!
 //! All functions are pure and safe for concurrent use.
 //!
-//! ## In this port
+//! ## This implementation
 //!
 //! The crate is `#![no_std]` with no allocator at all, and forbids unsafe
 //! code. The renderers write into a caller-owned `[u8; MAX_LEN]` and hand back
@@ -79,8 +79,8 @@ use core::fmt;
 /* ---------------------------------------------------------------------------
  * Internal-state assertions
  *
- * Two mechanisms, matching the sibling ports and spelled the way the full
- * decimal128-rust port spells them.
+ * Two mechanisms: one is a debugging aid, the other guards a write into a
+ * caller's buffer.
  *
  *   verify!(msg, cond)  internal-consistency claims -- unreachable for ANY
  *                       input, so a failure is a codec bug rather than bad
@@ -180,9 +180,8 @@ const TEN_POW_18: u64 = 1_000_000_000_000_000_000;
 /// slack instead of firing.
 ///
 /// A caller sizes their buffer with it, and `[u8; MAX_LEN]` puts it in the
-/// type, so an undersized buffer is a compile error. The C port's
-/// `D128TEXT_MAX_LEN` is one larger, because it writes a NUL and this does
-/// not.
+/// type, so an undersized buffer is a compile error. No NUL is written, so no
+/// room is reserved for one.
 pub const MAX_LEN: usize = 42;
 
 /* --------------------------------------------------------------------------
@@ -217,7 +216,7 @@ fn mulhi64(x: u64, y: u64) -> u64 {
     (((x as u128) * (y as u128)) >> 64) as u64
 }
 
-/// Leading zero count, 64 for zero -- matching Kotlin's `countLeadingZeroBits`.
+/// Leading zero count, 64 for zero.
 #[inline(always)]
 fn clz64(v: u64) -> u32 {
     v.leading_zeros()
@@ -314,7 +313,7 @@ fn calc_digit_len_128(dw1: u64, dw0: u64) -> usize {
 /// Multiply a 64-bit value by 10^pow10 and add `a`, returning the 128-bit result.
 fn u128_fma_pow10(x: u64, pow10: usize, a: u64) -> (u64, u64) {
     let y = POW10[pow10 << 1];
-    // The reference relies on this product wrapping past 64 bits and recovers
+    // This product is relied on to wrap past 64 bits, and recovers
     // the high half separately; taking it in u128 says the same thing directly.
     let prod = (x as u128) * (y as u128);
     let prod_hi = (prod >> 64) as u64;
@@ -369,7 +368,7 @@ fn u113_div_mod_pow10_max9(dw_hi: u64, dw_lo: u64, pow10: u32) -> (u64, u64, u64
 
 const EXACT: i32 = 0;
 const LT_HALF: i32 = 1;
-/// The reference's `HALF`; `HALF` alone reads as a quantity.
+/// `HALF` alone would read as a quantity.
 const TIE_HALF: i32 = 2;
 const GT_HALF: i32 = 3;
 
@@ -453,15 +452,16 @@ fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, 
  * binary integer, DPD as a leading digit plus eleven declets.
  *
  * Both directions are pure boolean arithmetic (Cowlishaw's dpd2bcd and bcd2dpd)
- * rather than lookup tables, matching the reference.
+ * rather than lookup tables.
  * ------------------------------------------------------------------------ */
 
 /*
  * Decode a 10-bit declet (bits p q r s t u v w x y) into 0..=999. Accepts the
  * 24 non-canonical declets as well as the 1000 canonical ones.
  *
- * The reference's `~t` is spelled `& !t` here: on operands already reduced to 0
- * or 1 the two agree, and the complemented bits are masked away either way.
+ * A complement of `t` is spelled `& !t` here: on operands already reduced to 0
+ * or 1 it agrees with `!`, and the complemented bits are masked away either
+ * way.
  */
 fn dpd_decode_declet(declet: u64) -> u64 {
     verify!("the declet is 10 bits", declet <= 1023);
@@ -579,7 +579,7 @@ fn bin_from_declets(declets: u64) -> u64 {
     while rest != 0 {
         bin += dpd_decode_declet(rest & 0x3FF) * multiplier;
         // The last iteration multiplies past 10^18 and the product is never
-        // used, since `rest` is zero by then. The reference wraps here too.
+        // used, since `rest` is zero by then, so it is let wrap.
         multiplier = multiplier.wrapping_mul(1000);
         rest >>= 10;
     }
@@ -750,11 +750,9 @@ fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8],
     }
 }
 
-/// Write a signed decimal integer; returns the number of bytes written. Stands
-/// in for the reference's `Int.toString` in the zero renderer, the same way the
-/// C port's `appendInt` does -- `core` has no integer-to-bytes helper, and
-/// routing this through `fmt` would pull the formatting machinery into the
-/// render path for one call site.
+/// Write a signed decimal integer; returns the number of bytes written.
+/// `core` has no integer-to-bytes helper, and routing this through `fmt` would
+/// pull the formatting machinery into the render path for one call site.
 fn append_int(out: &mut [u8], v: i32) -> usize {
     let mut tmp = [0u8; 12];
     let mut n = 0;
@@ -1316,8 +1314,8 @@ fn finalize_clamping(
     let y1 = POW10[pow10_offset + 1];
     let y0 = POW10[pow10_offset];
     // The three cross terms all discard their high halves and the sum wraps:
-    // the reference relies on that, and the result is guaranteed in range by
-    // the caller's digit-count test.
+    // that is relied on here, and the result is guaranteed in range by the
+    // caller's digit-count test.
     let pp00 = (dw0 as u128) * (y0 as u128);
     let pp00_hi = (pp00 >> 64) as u64;
     let pp00_lo = pp00 as u64;
@@ -1377,7 +1375,7 @@ fn finalize_subnormal(
     let round_up = (total_residue == GT_HALF) || (total_residue == TIE_HALF && (dw0_t & 1) != 0);
     if round_up {
         // The increment carries out of the low word only when it is all ones,
-        // which the reference lets wrap to zero and catches with the test below.
+        // which is let wrap to zero and caught with the test below.
         dw0_t = dw0_t.wrapping_add(1);
         if dw0_t == 0 {
             dw1_t += 1;
@@ -1465,7 +1463,7 @@ fn round_and_finalize_finite(
      * never once executed -- and therefore has never been verified to work -- it
      * is removed and the invariant is enforced.
      *
-     * Measured in the C port: zero occurrences across the 87k-row corpus and
+     * Measured: zero occurrences across the 87k-row corpus and
      * 400,000 random numerals, and across 76,280 finalizer calls driven by
      * inputs of up to 5,000 digits, where the widest coefficient ever seen was
      * 34.
@@ -1474,9 +1472,8 @@ fn round_and_finalize_finite(
      * because falling through would encode an out-of-range coefficient
      * silently. It cannot fire on a consumer's data -- no input reaches it --
      * only on a future caller that breaks the invariant, which is exactly when a
-     * loud failure is what you want. A port that parses differently, or a caller
-     * that is not a parser, needs the truncation step back; it is in the
-     * reference implementation and in every full port's Finalize.
+     * loud failure is what you want. A caller that is not a parser, or one that
+     * parses differently, needs the truncation step back.
      */
     demand(
         "the coefficient is at most 34 digits",
@@ -1576,9 +1573,9 @@ const fn parse_error(message: &'static str) -> ParseError {
  * lets the corpus assert that the two formats reject an input for the same
  * reason.
  *
- * The two Infinity spellings differ in case, matching the reference and every
- * sibling port: the lowercase one reports a character that is not part of the
- * word, the capitalized one a word that ended too early.
+ * The two Infinity spellings differ in case deliberately: the lowercase one
+ * reports a character that is not part of the word, the capitalized one a word
+ * that ended too early.
  */
 const ERR_EMPTY_STRING: ParseError = parse_error("empty string");
 const ERR_INVALID_FORMAT: ParseError = parse_error("invalid format");
@@ -1593,32 +1590,32 @@ const ERR_PARSING_NAN: ParseError = parse_error("failure parsing NaN");
 const ERR_NAN_PAYLOAD_CHAR: ParseError = parse_error("non-digit NaN payload character");
 
 /*
- * The input, read one byte at a time. `next` returns the byte at the cursor and
- * advances, except at the end -- and at an embedded NUL -- where it stays put
- * and keeps returning zero.
+ * The code of the byte at `index`, or -1 past the end of the slice.
  *
- * That is how the reference's `getOrNul` sentinel, which reads NUL forever past
- * the end of a Kotlin String, translates here. The C port spells the same thing
- * as a string pointer and an index. Parsing walks the UTF-8 bytes rather than
- * the `char`s, as the Swift port does -- but on a borrowed slice, so unlike
- * Swift's `Array(text.utf8)` nothing is copied.
+ * The parsers walk the input as byte codes, so end-of-input is one more code
+ * value rather than a bound test at every read. -1 is not a byte, so a NUL in
+ * the string stays an ordinary -- and invalid -- input byte rather than
+ * doubling as the terminator: a `&str` carries its own length and can hold one,
+ * and it is rejected. Parsing walks the UTF-8 bytes rather than the `char`s, on
+ * a borrowed slice, so nothing is copied.
+ *
+ * Rust has no increment operator, so the advance is its own line at each call
+ * rather than riding in the index.
  */
-struct TextCursor<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+fn code_at(bytes: &[u8], index: usize) -> i32 {
+    if index < bytes.len() {
+        i32::from(bytes[index])
+    } else {
+        -1
+    }
 }
 
-impl TextCursor<'_> {
-    fn next(&mut self) -> u8 {
-        if self.pos >= self.bytes.len() {
-            return 0;
-        }
-        let c = self.bytes[self.pos];
-        if c != 0 {
-            self.pos += 1;
-        }
-        c
-    }
+/*
+ * `u8::is_ascii_digit` has no counterpart on the `i32` the reader yields, so
+ * the digit test is spelled out here once.
+ */
+fn is_digit(ch: i32) -> bool {
+    ch >= i32::from(b'0') && ch <= i32::from(b'9')
 }
 
 /*
@@ -1630,16 +1627,18 @@ impl TextCursor<'_> {
  * ties-to-even rounding that follows. Exponent magnitudes clamp to 9999, which
  * is enough for finalize to detect overflow or underflow.
  *
- * The reference flushes leading zeros branchlessly, adding a comparison coerced
- * to an integer; the two counters below say the same thing with an `if`, since
+ * Leading zeros can be flushed branchlessly by coercing a comparison to an
+ * integer; the two counters below say the same thing with an `if`, since
  * `usize::from(bool)` in an accumulator reads worse than the branch.
  */
 fn parse_finite_value_text(
     format_is_bid: bool,
     sign: bool,
-    ch_first: u8,
-    t: &mut TextCursor<'_>,
+    ch_first: i32,
+    bytes: &[u8],
+    start_pos: usize,
 ) -> Result<(u64, u64), ParseError> {
+    let mut pos = start_pos;
     let mut residue = EXACT;
 
     let mut has_coefficient_digit = false; // any digit at all, including zero
@@ -1651,16 +1650,16 @@ fn parse_finite_value_text(
     let mut prev_was_digit = false;
     let mut after_underscore = false;
 
-    verify!("the first character was already read", ch_first != 0);
+    verify!("the first character was already read", ch_first != -1);
     let mut ch = ch_first;
     let mut fractional_digit_count: usize = 0;
     let mut accum19a: u64 = 0;
     let mut accum19b: u64 = 0;
     let mut exp: i32 = 0;
 
-    while ch.is_ascii_digit() || ch == b'.' || ch == b'_' {
-        if ch.is_ascii_digit() {
-            let d = u32::from(ch - b'0');
+    while is_digit(ch) || ch == i32::from(b'.') || ch == i32::from(b'_') {
+        if is_digit(ch) {
+            let d = (ch - i32::from(b'0')) as u32;
             has_coefficient_digit = true;
             // count while flushing leading zeros
             if significant_digit_count != 0 || d != 0 {
@@ -1680,7 +1679,7 @@ fn parse_finite_value_text(
             }
             prev_was_digit = true;
             after_underscore = false;
-        } else if ch == b'_' {
+        } else if ch == i32::from(b'_') {
             if !prev_was_digit {
                 return Err(ERR_UNDERSCORE_LOCATION);
             }
@@ -1697,7 +1696,8 @@ fn parse_finite_value_text(
             has_dot = true;
             prev_was_digit = false;
         }
-        ch = t.next();
+        ch = code_at(bytes, pos);
+        pos += 1;
     }
     if after_underscore {
         return Err(ERR_UNDERSCORE_LOCATION);
@@ -1706,18 +1706,20 @@ fn parse_finite_value_text(
         return Err(ERR_NO_COEFFICIENT_DIGIT);
     }
     // this path has at least one digit
-    if ch == b'E' || ch == b'e' {
-        ch = t.next();
-        if ch == b'+' || ch == b'-' {
-            exp_sign = ch == b'-';
-            ch = t.next();
+    if ch == i32::from(b'E') || ch == i32::from(b'e') {
+        ch = code_at(bytes, pos);
+        pos += 1;
+        if ch == i32::from(b'+') || ch == i32::from(b'-') {
+            exp_sign = ch == i32::from(b'-');
+            ch = code_at(bytes, pos);
+            pos += 1;
         }
         let mut has_exp_digit = false;
         let mut exp_significant_digit_count: usize = 0;
         prev_was_digit = false;
         after_underscore = false;
-        while ch.is_ascii_digit() || ch == b'_' {
-            if ch == b'_' {
+        while is_digit(ch) || ch == i32::from(b'_') {
+            if ch == i32::from(b'_') {
                 if !prev_was_digit {
                     return Err(ERR_UNDERSCORE_LOCATION);
                 }
@@ -1725,7 +1727,7 @@ fn parse_finite_value_text(
                 after_underscore = true;
             } else {
                 has_exp_digit = true;
-                let e_digit = i32::from(ch - b'0');
+                let e_digit = ch - i32::from(b'0');
                 // count while flushing leading zeros
                 if exp_significant_digit_count != 0 || e_digit != 0 {
                     exp_significant_digit_count += 1;
@@ -1738,7 +1740,8 @@ fn parse_finite_value_text(
                 prev_was_digit = true;
                 after_underscore = false;
             }
-            ch = t.next();
+            ch = code_at(bytes, pos);
+            pos += 1;
         }
         if after_underscore {
             return Err(ERR_UNDERSCORE_LOCATION);
@@ -1751,7 +1754,7 @@ fn parse_finite_value_text(
             exp = 9999;
         }
     }
-    if ch != 0 {
+    if ch != -1 {
         return Err(ERR_UNEXPECTED_CHAR);
     }
 
@@ -1783,23 +1786,27 @@ fn parse_finite_value_text(
 /// Parse Infinity, or its three-letter abbreviation Inf, case-insensitively.
 fn parse_infinity_text(
     sign: bool,
-    ch_first: u8,
-    t: &mut TextCursor<'_>,
+    ch_first: i32,
+    bytes: &[u8],
+    start_pos: usize,
 ) -> Result<(u64, u64), ParseError> {
     let mut ch = ch_first;
-    let mut ch_prev_code = 0u8;
+    let mut ch_prev_code = 0i32;
     const TARGET: &[u8; 8] = b"infinity";
-    for &target_code in TARGET {
-        if (ch | 0x20) != target_code {
-            if ch == 0 {
+    // Nothing below reads the position, so it is taken from the iteration
+    // rather than run as a local -- a counter that outlives nothing is what
+    // `explicit_counter_loop` is there to catch.
+    for (i, &target_code) in TARGET.iter().enumerate() {
+        if (ch | 0x20) != i32::from(target_code) {
+            if ch == -1 {
                 break;
             }
             return Err(ERR_PARSING_INFINITY_LC);
         }
         ch_prev_code = ch | 0x20;
-        ch = t.next();
+        ch = code_at(bytes, start_pos + i);
     }
-    if ch != 0 || (ch_prev_code != b'f' && ch_prev_code != b'y') {
+    if ch != -1 || (ch_prev_code != i32::from(b'f') && ch_prev_code != i32::from(b'y')) {
         return Err(ERR_PARSING_INFINITY);
     }
     let s = if sign { SIGN_BIT } else { 0 };
@@ -1817,8 +1824,7 @@ fn parse_infinity_text(
  * be the last character of the input. So NaN(1)2(3), NaN(1, NaN(1] and NaN() are
  * all rejected, and NaN[1] and NaN{1} are not this form at all.
  *
- * The full decimal128 ports accept the same spelling; the codecs had it first,
- * and the ports took it on 2026-08-23. It exists because C's own strtod reads
+ * This spelling exists because C's own strtod reads
  * NAN(n-char-sequence), so the spelling reaches a caller from the platform
  * itself. The resemblance stops at the parentheses: strtod's sequence is
  * letters, digits and underscores read as an implementation-defined integer,
@@ -1827,47 +1833,57 @@ fn parse_infinity_text(
 fn parse_nan_text(
     format_is_bid: bool,
     sign: bool,
-    ch_first: u8,
-    t: &mut TextCursor<'_>,
+    ch_first: i32,
+    bytes: &[u8],
+    start_pos: usize,
 ) -> Result<(u64, u64), ParseError> {
+    let mut pos = start_pos;
     let mut ch = ch_first;
-    let has_s = (ch | 0x20) == b's';
-    let has_q = (ch | 0x20) == b'q';
+    let has_s = (ch | 0x20) == i32::from(b's');
+    let has_q = (ch | 0x20) == i32::from(b'q');
     if has_q || has_s {
-        ch = t.next();
+        ch = code_at(bytes, pos);
+        pos += 1;
     }
-    if ((ch | 0x20) != b'n') || ((t.next() | 0x20) != b'a') || ((t.next() | 0x20) != b'n') {
+    if ((ch | 0x20) != i32::from(b'n'))
+        || ((code_at(bytes, pos) | 0x20) != i32::from(b'a'))
+        || ((code_at(bytes, pos + 1) | 0x20) != i32::from(b'n'))
+    {
         return Err(ERR_PARSING_NAN);
     }
+    pos += 2;
 
     let mut payload_dw0: u64 = 0;
     let mut payload_dw1: u64 = 0;
-    ch = t.next();
-    let has_paren = ch == b'(';
+    ch = code_at(bytes, pos);
+    pos += 1;
+    let has_paren = ch == i32::from(b'(');
     if has_paren {
-        ch = t.next();
+        ch = code_at(bytes, pos);
+        pos += 1;
     }
-    if has_paren || ch != 0 {
+    if has_paren || ch != -1 {
         let mut accum_digit_count: usize = 0;
         let mut accum19a: u64 = 0;
         let mut accum19b: u64 = 0;
-        while ch.is_ascii_digit() {
-            let d = u64::from(ch - b'0');
+        while is_digit(ch) {
+            let d = (ch - i32::from(b'0')) as u64;
             // Count every digit written, leading zeros included. The 33-digit
             // limit is a limit on the payload as spelled, not on its significant
             // digits, so "NaN" followed by forty zeros and a one is over the
             // limit and reads as zero. Leading zeros contribute nothing to the
             // accumulators, so the value of a payload within the limit is
             // unaffected -- and an over-limit payload runs the second
-            // accumulator past 64 bits, which the reference lets wrap and which
-            // the limit test below discards.
+            // accumulator past 64 bits, which is let wrap and which the limit
+            // test below discards.
             accum_digit_count += 1;
             if accum_digit_count <= 19 {
                 accum19a = (accum19a * 10) + d;
             } else {
                 accum19b = accum19b.wrapping_mul(10).wrapping_add(d);
             }
-            ch = t.next();
+            ch = code_at(bytes, pos);
+            pos += 1;
         }
         if accum_digit_count == 0 {
             return Err(if has_paren {
@@ -1878,17 +1894,17 @@ fn parse_nan_text(
         }
         if has_paren {
             // the ')' must be present and must end the input
-            if ch != b')' {
-                return Err(if ch == 0 {
+            if ch != i32::from(b')') {
+                return Err(if ch == -1 {
                     ERR_PARSING_NAN
                 } else {
                     ERR_NAN_PAYLOAD_CHAR
                 });
             }
-            if t.next() != 0 {
+            if code_at(bytes, pos) != -1 {
                 return Err(ERR_PARSING_NAN);
             }
-        } else if ch != 0 {
+        } else if ch != -1 {
             return Err(ERR_NAN_PAYLOAD_CHAR);
         }
         if accum_digit_count > 33 {
@@ -1914,24 +1930,26 @@ fn parse_nan_text(
 
 /// Read the optional sign, then dispatch on the leading character.
 fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64), ParseError> {
-    let mut t = TextCursor { bytes, pos: 0 };
-    let ch_first = t.next();
+    let mut pos = 0;
+    let ch_first = code_at(bytes, pos);
+    pos += 1;
     let mut ch = ch_first;
-    let sign = ch == b'-';
-    if ch == b'+' || ch == b'-' {
-        ch = t.next();
+    let sign = ch == i32::from(b'-');
+    if ch == i32::from(b'+') || ch == i32::from(b'-') {
+        ch = code_at(bytes, pos);
+        pos += 1;
     }
-    if ch.is_ascii_digit() || ch == b'.' {
-        return parse_finite_value_text(format_is_bid, sign, ch, &mut t);
+    if is_digit(ch) || ch == i32::from(b'.') {
+        return parse_finite_value_text(format_is_bid, sign, ch, bytes, pos);
     }
     let ch_lower = ch | 0x20;
-    if ch_lower == b'i' {
-        return parse_infinity_text(sign, ch, &mut t);
+    if ch_lower == i32::from(b'i') {
+        return parse_infinity_text(sign, ch, bytes, pos);
     }
-    if ch_lower == b'n' || ch_lower == b's' || ch_lower == b'q' {
-        return parse_nan_text(format_is_bid, sign, ch, &mut t);
+    if ch_lower == i32::from(b'n') || ch_lower == i32::from(b's') || ch_lower == i32::from(b'q') {
+        return parse_nan_text(format_is_bid, sign, ch, bytes, pos);
     }
-    if ch_first == 0 {
+    if ch_first == -1 {
         return Err(ERR_EMPTY_STRING);
     }
     Err(ERR_INVALID_FORMAT)
@@ -1943,10 +1961,10 @@ fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64
 
 /// The canonical positive quiet NaN.
 ///
-/// The sibling ports write this into their out-parameter when a parse fails, so
-/// that a caller who ignores the failure still holds a legal IEEE 754-2019
-/// datum. Here the `Result` makes that impossible to need — but the constant is
-/// what a caller wanting the same behaviour reaches for:
+/// An out-parameter API would write this on a failed parse, so that a caller
+/// who ignores the failure still holds a legal IEEE 754-2019 datum. Here the
+/// `Result` makes that impossible to need — but the constant is what a caller
+/// wanting the same behaviour reaches for:
 /// `bid128_parse(text).unwrap_or(QNAN)`. It is the same bit pattern in both
 /// formats.
 pub const QNAN: u128 = (QNAN_PATTERN_HI as u128) << 64;
@@ -2049,11 +2067,11 @@ pub fn dpd128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 
 /// Parse a decimal character sequence into a BID128 encoding.
 ///
-/// Returns the encoding on success, or a `ParseError` on failure. The sibling
-/// ports write the canonical positive quiet NaN in that case, so a caller who
-/// ignores the failure still holds a legal IEEE 754-2019 datum; here the
-/// `Result` makes that unnecessary, and `QNAN` is available for a caller who
-/// wants the same behaviour explicitly. The error's message is human-readable;
+/// Returns the encoding on success, or a `ParseError` on failure. An
+/// out-parameter API would write the canonical positive quiet NaN in that case,
+/// so a caller who ignores the failure still holds a legal IEEE 754-2019 datum;
+/// here the `Result` makes that unnecessary, and `QNAN` is available for a
+/// caller who wants the same behaviour explicitly. The error's message is human-readable;
 /// its exact wording is not part of the contract and may change between
 /// versions.
 ///
@@ -2106,11 +2124,11 @@ pub fn bid128_parse(text: &str) -> Result<u128, ParseError> {
 
 /// Parse a decimal character sequence into a DPD128 encoding.
 ///
-/// Returns the encoding on success, or a `ParseError` on failure. The sibling
-/// ports write the canonical positive quiet NaN in that case, so a caller who
-/// ignores the failure still holds a legal IEEE 754-2019 datum; here the
-/// `Result` makes that unnecessary, and `QNAN` is available for a caller who
-/// wants the same behaviour explicitly. The error's message is human-readable;
+/// Returns the encoding on success, or a `ParseError` on failure. An
+/// out-parameter API would write the canonical positive quiet NaN in that case,
+/// so a caller who ignores the failure still holds a legal IEEE 754-2019 datum;
+/// here the `Result` makes that unnecessary, and `QNAN` is available for a
+/// caller who wants the same behaviour explicitly. The error's message is human-readable;
 /// its exact wording is not part of the contract and may change between
 /// versions.
 ///
