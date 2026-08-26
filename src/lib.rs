@@ -1572,10 +1572,6 @@ const fn parse_error(message: &'static str) -> ParseError {
  * The parse failures, one value each. Sharing one value per failure is what
  * lets the corpus assert that the two formats reject an input for the same
  * reason.
- *
- * The two Infinity spellings differ in case deliberately: the lowercase one
- * reports a character that is not part of the word, the capitalized one a word
- * that ended too early.
  */
 const ERR_EMPTY_STRING: ParseError = parse_error("empty string");
 const ERR_INVALID_FORMAT: ParseError = parse_error("invalid format");
@@ -1584,7 +1580,6 @@ const ERR_DOUBLE_RADIX_DOT: ParseError = parse_error("double radix dot");
 const ERR_NO_COEFFICIENT_DIGIT: ParseError = parse_error("no coefficient digit");
 const ERR_NO_EXPONENT_DIGIT: ParseError = parse_error("no exponent digit");
 const ERR_UNDERSCORE_LOCATION: ParseError = parse_error("invalid underscore location");
-const ERR_PARSING_INFINITY_LC: ParseError = parse_error("failure parsing infinity");
 const ERR_PARSING_INFINITY: ParseError = parse_error("failure parsing Infinity");
 const ERR_PARSING_NAN: ParseError = parse_error("failure parsing NaN");
 const ERR_NAN_PAYLOAD_CHAR: ParseError = parse_error("non-digit NaN payload character");
@@ -1801,7 +1796,7 @@ fn parse_infinity_text(
             if ch == -1 {
                 break;
             }
-            return Err(ERR_PARSING_INFINITY_LC);
+            return Err(ERR_PARSING_INFINITY);
         }
         ch_prev_code = ch | 0x20;
         ch = code_at(bytes, start_pos + i);
