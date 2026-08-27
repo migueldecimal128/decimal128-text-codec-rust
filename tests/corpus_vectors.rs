@@ -132,6 +132,15 @@ fn error_vectors_are_rejected_by_both_formats() {
             row.text,
             row.status
         );
+        if let Err(b) = bid {
+            assert!(
+                b.message() == row.status,
+                "error line {}: <{}> returned <{b}>, corpus says {}",
+                row.line_number,
+                row.text,
+                row.status
+            );
+        }
         if let (Err(b), Err(d)) = (bid, dpd) {
             // Compared through `message()` rather than by value: the sibling
             // ports' errors ARE strings, and this is their `strcmp(bErr, dErr)`.

@@ -1573,16 +1573,15 @@ const fn parse_error(message: &'static str) -> ParseError {
  * lets the corpus assert that the two formats reject an input for the same
  * reason.
  */
-const ERR_EMPTY_STRING: ParseError = parse_error("empty string");
-const ERR_INVALID_FORMAT: ParseError = parse_error("invalid format");
-const ERR_UNEXPECTED_CHAR: ParseError = parse_error("unexpected char");
-const ERR_DOUBLE_RADIX_DOT: ParseError = parse_error("double radix dot");
-const ERR_NO_COEFFICIENT_DIGIT: ParseError = parse_error("no coefficient digit");
-const ERR_NO_EXPONENT_DIGIT: ParseError = parse_error("no exponent digit");
-const ERR_UNDERSCORE_LOCATION: ParseError = parse_error("invalid underscore location");
-const ERR_PARSING_INFINITY: ParseError = parse_error("failure parsing Infinity");
-const ERR_PARSING_NAN: ParseError = parse_error("failure parsing NaN");
-const ERR_NAN_PAYLOAD_CHAR: ParseError = parse_error("non-digit NaN payload character");
+const ERR_EMPTY_STRING: ParseError = parse_error("EMPTY_STRING");
+const ERR_INVALID_FORMAT: ParseError = parse_error("INVALID_FORMAT");
+const ERR_UNEXPECTED_CHAR: ParseError = parse_error("UNEXPECTED_CHAR");
+const ERR_DOUBLE_RADIX_DOT: ParseError = parse_error("DOUBLE_DOT");
+const ERR_NO_COEFFICIENT_DIGIT: ParseError = parse_error("NO_COEFFICIENT_DIGIT");
+const ERR_NO_EXPONENT_DIGIT: ParseError = parse_error("NO_EXPONENT_DIGIT");
+const ERR_UNDERSCORE_LOCATION: ParseError = parse_error("INVALID_UNDERSCORE_LOCATION");
+const ERR_PARSING_INFINITY: ParseError = parse_error("FAILURE_PARSING_INFINITY");
+const ERR_PARSING_NAN: ParseError = parse_error("FAILURE_PARSING_NAN");
 
 /*
  * The code of the byte at `index`, or -1 past the end of the slice.
@@ -1884,7 +1883,7 @@ fn parse_nan_text(
             return Err(if has_paren {
                 ERR_PARSING_NAN
             } else {
-                ERR_NAN_PAYLOAD_CHAR
+                ERR_PARSING_NAN
             });
         }
         if has_paren {
@@ -1893,14 +1892,14 @@ fn parse_nan_text(
                 return Err(if ch == -1 {
                     ERR_PARSING_NAN
                 } else {
-                    ERR_NAN_PAYLOAD_CHAR
+                    ERR_PARSING_NAN
                 });
             }
             if code_at(bytes, pos) != -1 {
                 return Err(ERR_PARSING_NAN);
             }
         } else if ch != -1 {
-            return Err(ERR_NAN_PAYLOAD_CHAR);
+            return Err(ERR_PARSING_NAN);
         }
         if accum_digit_count > 33 {
             payload_dw0 = 0;
@@ -2067,8 +2066,11 @@ pub fn dpd128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 /// so a caller who ignores the failure still holds a legal IEEE 754-2019 datum;
 /// here the `Result` makes that unnecessary, and `QNAN` is available for a
 /// caller who wants the same behaviour explicitly. The error's message is human-readable;
-/// its exact wording is not part of the contract and may change between
-/// versions.
+/// its text is the engine's ParseStatus name for the failure --
+/// EMPTY_STRING, INVALID_FORMAT, UNEXPECTED_CHAR, DOUBLE_DOT,
+/// NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT, INVALID_UNDERSCORE_LOCATION,
+/// FAILURE_PARSING_INFINITY or FAILURE_PARSING_NAN -- and the conformance
+/// suite asserts it against the shared corpus, so it is part of the contract.
 ///
 /// Accepted input:
 ///
@@ -2124,8 +2126,11 @@ pub fn bid128_parse(text: &str) -> Result<u128, ParseError> {
 /// so a caller who ignores the failure still holds a legal IEEE 754-2019 datum;
 /// here the `Result` makes that unnecessary, and `QNAN` is available for a
 /// caller who wants the same behaviour explicitly. The error's message is human-readable;
-/// its exact wording is not part of the contract and may change between
-/// versions.
+/// its text is the engine's ParseStatus name for the failure --
+/// EMPTY_STRING, INVALID_FORMAT, UNEXPECTED_CHAR, DOUBLE_DOT,
+/// NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT, INVALID_UNDERSCORE_LOCATION,
+/// FAILURE_PARSING_INFINITY or FAILURE_PARSING_NAN -- and the conformance
+/// suite asserts it against the shared corpus, so it is part of the contract.
 ///
 /// Accepted input:
 ///
