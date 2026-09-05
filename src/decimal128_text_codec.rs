@@ -91,14 +91,12 @@ use core::fmt;
  *                       feature off neither the message nor the condition is
  *                       compiled at all. CI runs the whole corpus with it on.
  *
- *   demand(msg, cond)   claims that must survive into a shipping build. A
- *                       write into the caller's buffer needs none: the length
- *                       is in the buffer's type and every index is
- *                       bounds-checked, so an over-long form panics on its own.
- *                       What is left is the coefficient-width invariant
- *                       standing in for the removed precision-truncation step,
- *                       where falling through would silently encode an
- *                       out-of-range coefficient.
+ *   demand(msg, cond)   claims that must survive into a shipping build: that
+ *                       the caller's buffer is at least MAX_LEN, checked once
+ *                       on entry to each decoder, and the coefficient-width
+ *                       invariant standing in for the removed
+ *                       precision-truncation step, where falling through
+ *                       would silently encode an out-of-range coefficient.
  *
  * Messages are `&str` literals, so the contracts stay alloc-free.
  * ------------------------------------------------------------------------- */
@@ -176,12 +174,12 @@ const TEN_POW_18: u64 = 1_000_000_000_000_000_000;
 /// field cannot exceed four digits inside decimal128's range, so neither
 /// number can drift without the format itself changing.
 ///
-/// Every write in the renderers lands in a `[u8; MAX_LEN]`, so this bound is
-/// enforced by the type rather than by a check the codec writes: a form that
-/// overran it would panic on the index, not corrupt memory. Sizing it exactly
-/// rather than generously is what keeps that enforcement meaningful: with
-/// slack, an error in the arithmetic above would quietly consume the slack
-/// instead of failing.
+/// The renderers are checked against this bound once, on entry, rather than at
+/// every write: the buffer is confirmed to be at least this long and the forms
+/// above are what guarantee nothing longer is produced. Sizing it exactly
+/// rather than generously is what keeps the two halves of that argument in
+/// contact; with slack, an error in the arithmetic above would quietly consume
+/// the slack instead of showing up.
 ///
 /// A caller sizes their buffer with it, and `[u8; MAX_LEN]` puts it in the
 /// type, so an undersized buffer is a compile error. No NUL is written, so no
@@ -631,7 +629,7 @@ const MASK32: u64 = 0xFFFF_FFFF;
  * A binary cascade: one divide by 10^4 to split into halves, two by 10^2 to
  * split those into pairs, four by 10 for the digits.
  */
-fn render8_digits_before_index(dw: u64, ascii: &mut [u8; MAX_LEN], off_maxx: usize) {
+fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
     let abcd = mulhi64(dw, M_U64_DIV_1E4) >> S_U64_DIV_1E4;
     let efgh = dw - (abcd * 10000);
 
@@ -671,7 +669,7 @@ fn render8_digits_before_index(dw: u64, ascii: &mut [u8; MAX_LEN], off_maxx: usi
 fn render_tail_digits_before_index(
     render_digit_count: usize,
     dw: u64,
-    ascii: &mut [u8; MAX_LEN],
+    ascii: &mut [u8],
     off_maxx: usize,
 ) {
     let mut t = dw;
@@ -716,13 +714,7 @@ fn render_tail_digits_before_index(
  * three divides by 10^8 across rotating 96-bit chunks; once it fits in 64 bits,
  * one divide by 10^8 per 8 digits; then the 1..=7 leftover digits.
  */
-fn u128_to_ascii(
-    digit_print_count: usize,
-    dw1: u64,
-    dw0: u64,
-    ascii: &mut [u8; MAX_LEN],
-    off: usize,
-) {
+fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8], off: usize) {
     let mut dw1_t = dw1;
     let mut dw0_t = dw0;
     let mut ich = off + digit_print_count;
@@ -801,7 +793,7 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
 /// [`append_int`]'s own `-`.
 const INFINITY_TEXT: &[u8] = b"Infinity";
 
-fn inf_ascii(out: &mut [u8; MAX_LEN], sign: bool) -> usize {
+fn inf_ascii(out: &mut [u8], sign: bool) -> usize {
     let sign_len = usize::from(sign);
     let total_len = sign_len + INFINITY_TEXT.len();
     out[0] = b'-'; // overwritten by the b'I' when unsigned
@@ -812,7 +804,7 @@ fn inf_ascii(out: &mut [u8; MAX_LEN], sign: bool) -> usize {
 const NAN_TEXT: &[u8] = b"NaN";
 
 fn nan_ascii(
-    out: &mut [u8; MAX_LEN],
+    out: &mut [u8],
     sign: bool,
     is_signaling: bool,
     payload_hi: u64,
@@ -855,7 +847,7 @@ const PLAIN_ZERO: &[u8] = b"0.000000";
 /// The exponent form's base. The `+` is not here: see [`zer_ascii`] below.
 const ZERO_EXP_TEXT: &[u8] = b"0E";
 
-fn zer_ascii(out: &mut [u8; MAX_LEN], sign: bool, q_exp: i32) -> usize {
+fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     if (-6..=0).contains(&q_exp) {
         let k = (-q_exp) as usize;
         let zero_len = if k == 0 { 1 } else { k + 2 };
@@ -883,13 +875,7 @@ fn zer_ascii(out: &mut [u8; MAX_LEN], sign: bool, q_exp: i32) -> usize {
 }
 
 /// `q_exp == 0`: a plain integer, no radix point and no exponent.
-fn fnz_to_integer_ascii(
-    out: &mut [u8; MAX_LEN],
-    sign: bool,
-    digit_len: usize,
-    dw1: u64,
-    dw0: u64,
-) -> usize {
+fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, dw0: u64) -> usize {
     verify!(
         "a finite nonzero value has at least one digit",
         digit_len > 0
@@ -906,7 +892,7 @@ fn fnz_to_integer_ascii(
  * one position to make room for the radix point.
  */
 fn fnz_to_decimal_point_ascii(
-    out: &mut [u8; MAX_LEN],
+    out: &mut [u8],
     sign: bool,
     q_exp: i32,
     digit_len: usize,
@@ -941,7 +927,7 @@ fn fnz_to_decimal_point_ascii(
  * to-scientific-string form: 1.234E+5, never 1.234E5.
  */
 fn fnz_to_normalized_scientific_ascii(
-    out: &mut [u8; MAX_LEN],
+    out: &mut [u8],
     sign: bool,
     q_exp: i32,
     digit_len: usize,
@@ -988,7 +974,7 @@ fn fnz_to_normalized_scientific_ascii(
  * fixed-point when the adjusted exponent is at least -6, scientific
  * otherwise -- the GDAS auto-select rule.
  */
-fn fnz_ascii(out: &mut [u8; MAX_LEN], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
+fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
     let digit_len = calc_digit_len_128(dw1, dw0);
     let e_exp = q_exp + (digit_len as i32 - 1);
     if q_exp == 0 {
@@ -1005,7 +991,14 @@ fn fnz_ascii(out: &mut [u8; MAX_LEN], sign: bool, q_exp: i32, dw1: u64, dw0: u64
  * ------------------------------------------------------------------------ */
 
 /// Unpack a BID128 encoding, per IEEE 754-2019 3.5.2, and render it.
-fn decode_bid128_to_ascii(out: &mut [u8; MAX_LEN], bid128_hi: u64, bid128_lo: u64) -> usize {
+fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usize {
+    // The API's contract is a buffer of at least MAX_LEN, so that is what is
+    // checked -- once, on every call, rather than per rendered form. The
+    // public entry points take a `&mut [u8; MAX_LEN]`, but that length is
+    // gone by the time the slice reaches here, so it is re-established at
+    // this boundary.
+    demand("the buffer is at least MAX_LEN bytes", out.len() >= MAX_LEN);
+
     verify!(
         "the field widths tile the encoding",
         1 + W5 + T_WIDTH == 128
@@ -1056,7 +1049,14 @@ fn decode_bid128_to_ascii(out: &mut [u8; MAX_LEN], bid128_hi: u64, bid128_lo: u6
 }
 
 /// Unpack a DPD128 encoding and hand the pieces to the same renderers.
-fn decode_dpd128_to_ascii(out: &mut [u8; MAX_LEN], dpd128_hi: u64, dpd128_lo: u64) -> usize {
+fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usize {
+    // The API's contract is a buffer of at least MAX_LEN, so that is what is
+    // checked -- once, on every call, rather than per rendered form. The
+    // public entry points take a `&mut [u8; MAX_LEN]`, but that length is
+    // gone by the time the slice reaches here, so it is re-established at
+    // this boundary.
+    demand("the buffer is at least MAX_LEN bytes", out.len() >= MAX_LEN);
+
     const W: u32 = 12; // exponent continuation width
 
     let sign = (dpd128_hi & SIGN_BIT) != 0;
