@@ -174,10 +174,12 @@ const TEN_POW_18: u64 = 1_000_000_000_000_000_000;
 /// field cannot exceed four digits inside decimal128's range, so neither
 /// number can drift without the format itself changing.
 ///
-/// Every write in the renderers is guarded against this bound. Sizing it
-/// exactly rather than generously is what turns those guards into real checks:
-/// with slack, an error in the arithmetic above would quietly consume the
-/// slack instead of firing.
+/// Every write in the renderers lands in a `[u8; MAX_LEN]`, so this bound is
+/// enforced by the type rather than by a check the codec writes: a form that
+/// overran it would panic on the index, not corrupt memory. Sizing it exactly
+/// rather than generously is what keeps that enforcement meaningful: with
+/// slack, an error in the arithmetic above would quietly consume the slack
+/// instead of failing.
 ///
 /// A caller sizes their buffer with it, and `[u8; MAX_LEN]` puts it in the
 /// type, so an undersized buffer is a compile error. No NUL is written, so no
@@ -627,7 +629,7 @@ const MASK32: u64 = 0xFFFF_FFFF;
  * A binary cascade: one divide by 10^4 to split into halves, two by 10^2 to
  * split those into pairs, four by 10 for the digits.
  */
-fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
+fn render8_digits_before_index(dw: u64, ascii: &mut [u8; MAX_LEN], off_maxx: usize) {
     let abcd = mulhi64(dw, M_U64_DIV_1E4) >> S_U64_DIV_1E4;
     let efgh = dw - (abcd * 10000);
 
@@ -649,7 +651,6 @@ fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
     let g = (gh * M_U32_DIV_1E1) >> S_U32_DIV_1E1;
     let h = gh - (g * 10);
 
-    demand("the eight digits are inside the buffer", off_maxx >= 8);
     ascii[off_maxx - 8] = b'0' + a as u8;
     ascii[off_maxx - 7] = b'0' + b as u8;
     ascii[off_maxx - 6] = b'0' + c as u8;
@@ -668,16 +669,12 @@ fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
 fn render_tail_digits_before_index(
     render_digit_count: usize,
     dw: u64,
-    ascii: &mut [u8],
+    ascii: &mut [u8; MAX_LEN],
     off_maxx: usize,
 ) {
     let mut t = dw;
     let mut remaining_digit_count = render_digit_count;
     let mut ib = off_maxx;
-    demand(
-        "the digits are inside the buffer",
-        off_maxx >= render_digit_count,
-    );
     while remaining_digit_count >= 4 {
         let t0 = mulhi64(t, M_U64_DIV_1E4) >> S_U64_DIV_1E4;
         let abcd = t - (t0 * 10000);
@@ -717,7 +714,13 @@ fn render_tail_digits_before_index(
  * three divides by 10^8 across rotating 96-bit chunks; once it fits in 64 bits,
  * one divide by 10^8 per 8 digits; then the 1..=7 leftover digits.
  */
-fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8], off: usize) {
+fn u128_to_ascii(
+    digit_print_count: usize,
+    dw1: u64,
+    dw0: u64,
+    ascii: &mut [u8; MAX_LEN],
+    off: usize,
+) {
     let mut dw1_t = dw1;
     let mut dw0_t = dw0;
     let mut ich = off + digit_print_count;
@@ -796,10 +799,9 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
 /// [`append_int`]'s own `-`.
 const INFINITY_TEXT: &[u8] = b"Infinity";
 
-fn inf_ascii(out: &mut [u8], sign: bool) -> usize {
+fn inf_ascii(out: &mut [u8; MAX_LEN], sign: bool) -> usize {
     let sign_len = usize::from(sign);
     let total_len = sign_len + INFINITY_TEXT.len();
-    demand("Infinity fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-'; // overwritten by the b'I' when unsigned
     out[sign_len..total_len].copy_from_slice(INFINITY_TEXT);
     total_len
@@ -808,7 +810,7 @@ fn inf_ascii(out: &mut [u8], sign: bool) -> usize {
 const NAN_TEXT: &[u8] = b"NaN";
 
 fn nan_ascii(
-    out: &mut [u8],
+    out: &mut [u8; MAX_LEN],
     sign: bool,
     is_signaling: bool,
     payload_hi: u64,
@@ -826,13 +828,11 @@ fn nan_ascii(
         || payload_hi > MAX_PAYLOAD_HI
         || (payload_hi == MAX_PAYLOAD_HI && payload_lo > MAX_PAYLOAD_LO)
     {
-        demand("the bare NaN fits the buffer", base_len <= MAX_LEN);
         out[word_off..base_len].copy_from_slice(NAN_TEXT);
         return base_len;
     }
     let digit_len = calc_digit_len_128(payload_hi, payload_lo);
     let total_len = base_len + digit_len;
-    demand("the NaN payload fits the buffer", total_len <= MAX_LEN);
     out[word_off..base_len].copy_from_slice(NAN_TEXT);
     u128_to_ascii(digit_len, payload_hi, payload_lo, out, base_len);
     total_len
@@ -853,13 +853,12 @@ const PLAIN_ZERO: &[u8] = b"0.000000";
 /// The exponent form's base. The `+` is not here: see [`zer_ascii`] below.
 const ZERO_EXP_TEXT: &[u8] = b"0E";
 
-fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
+fn zer_ascii(out: &mut [u8; MAX_LEN], sign: bool, q_exp: i32) -> usize {
     if (-6..=0).contains(&q_exp) {
         let k = (-q_exp) as usize;
         let zero_len = if k == 0 { 1 } else { k + 2 };
         let sign_len = usize::from(sign);
         let total_len = sign_len + zero_len;
-        demand("the plain zero fits the buffer", total_len <= MAX_LEN);
         out[0] = b'-'; // overwritten by the b'0' when unsigned
         out[sign_len..total_len].copy_from_slice(&PLAIN_ZERO[..zero_len]);
         return total_len;
@@ -875,10 +874,6 @@ fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     // never sees zero.
     let plus_len = usize::from(q_exp > 0);
     let base_len = sign_len + word_len + plus_len;
-    demand(
-        "the exponent-form zero fits the buffer",
-        base_len + 6 <= MAX_LEN,
-    );
     out[0] = b'-'; // overwritten by the b'0' when unsigned
     out[sign_len..sign_len + word_len].copy_from_slice(ZERO_EXP_TEXT);
     out[sign_len + word_len] = b'+'; // overwritten by append_int's b'-' when q_exp < 0
@@ -886,14 +881,19 @@ fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
 }
 
 /// `q_exp == 0`: a plain integer, no radix point and no exponent.
-fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, dw0: u64) -> usize {
+fn fnz_to_integer_ascii(
+    out: &mut [u8; MAX_LEN],
+    sign: bool,
+    digit_len: usize,
+    dw1: u64,
+    dw0: u64,
+) -> usize {
     verify!(
         "a finite nonzero value has at least one digit",
         digit_len > 0
     );
     let sign_len = usize::from(sign);
     let total_len = sign_len + digit_len;
-    demand("the integer form fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-'; // overwritten by the first digit when unsigned
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len);
     total_len
@@ -904,7 +904,7 @@ fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, 
  * one position to make room for the radix point.
  */
 fn fnz_to_decimal_point_ascii(
-    out: &mut [u8],
+    out: &mut [u8; MAX_LEN],
     sign: bool,
     q_exp: i32,
     digit_len: usize,
@@ -921,7 +921,6 @@ fn fnz_to_decimal_point_ascii(
     let sign_len = usize::from(sign);
     let decimal_point_len = 1;
     let total_len = sign_len + leading_zero_count + decimal_point_len + digit_len;
-    demand("the fixed-point form fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-';
     for byte in out.iter_mut().take(leading_zero_count + 1).skip(sign_len) {
         // one extra, overwritten below
@@ -940,7 +939,7 @@ fn fnz_to_decimal_point_ascii(
  * to-scientific-string form: 1.234E+5, never 1.234E5.
  */
 fn fnz_to_normalized_scientific_ascii(
-    out: &mut [u8],
+    out: &mut [u8; MAX_LEN],
     sign: bool,
     q_exp: i32,
     digit_len: usize,
@@ -969,7 +968,6 @@ fn fnz_to_normalized_scientific_ascii(
     };
     let total_len =
         sign_len + decimal_point_len + digit_len + exp_e_len + exp_sign_len + exp_digit_len;
-    demand("the scientific form fits the buffer", total_len <= MAX_LEN);
     out[0] = b'-';
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len + decimal_point_len);
     if decimal_point_len > 0 {
@@ -988,7 +986,7 @@ fn fnz_to_normalized_scientific_ascii(
  * fixed-point when the adjusted exponent is at least -6, scientific
  * otherwise -- the GDAS auto-select rule.
  */
-fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
+fn fnz_ascii(out: &mut [u8; MAX_LEN], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
     let digit_len = calc_digit_len_128(dw1, dw0);
     let e_exp = q_exp + (digit_len as i32 - 1);
     if q_exp == 0 {
@@ -1005,7 +1003,7 @@ fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usiz
  * ------------------------------------------------------------------------ */
 
 /// Unpack a BID128 encoding, per IEEE 754-2019 3.5.2, and render it.
-fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usize {
+fn decode_bid128_to_ascii(out: &mut [u8; MAX_LEN], bid128_hi: u64, bid128_lo: u64) -> usize {
     verify!(
         "the field widths tile the encoding",
         1 + W5 + T_WIDTH == 128
@@ -1056,7 +1054,7 @@ fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usi
 }
 
 /// Unpack a DPD128 encoding and hand the pieces to the same renderers.
-fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usize {
+fn decode_dpd128_to_ascii(out: &mut [u8; MAX_LEN], dpd128_hi: u64, dpd128_lo: u64) -> usize {
     const W: u32 = 12; // exponent continuation width
 
     let sign = (dpd128_hi & SIGN_BIT) != 0;
