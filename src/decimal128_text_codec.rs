@@ -79,8 +79,8 @@ use core::fmt;
 /* ---------------------------------------------------------------------------
  * Internal-state assertions
  *
- * Two mechanisms: one is a debugging aid, the other guards a write into a
- * caller's buffer.
+ * Two mechanisms: one is a debugging aid, the other a claim that must hold
+ * in a shipping build.
  *
  *   verify!(msg, cond)  internal-consistency claims -- unreachable for ANY
  *                       input, so a failure is a codec bug rather than bad
@@ -91,12 +91,14 @@ use core::fmt;
  *                       feature off neither the message nor the condition is
  *                       compiled at all. CI runs the whole corpus with it on.
  *
- *   demand(msg, cond)   claims that must survive into a shipping build. In C
- *                       these also guard writes into the caller's buffer, which
- *                       Rust bounds-checks for us; what is left is the
- *                       coefficient-width invariant standing in for the removed
- *                       precision-truncation step, where falling through would
- *                       silently encode an out-of-range coefficient.
+ *   demand(msg, cond)   claims that must survive into a shipping build. A
+ *                       write into the caller's buffer needs none: the length
+ *                       is in the buffer's type and every index is
+ *                       bounds-checked, so an over-long form panics on its own.
+ *                       What is left is the coefficient-width invariant
+ *                       standing in for the removed precision-truncation step,
+ *                       where falling through would silently encode an
+ *                       out-of-range coefficient.
  *
  * Messages are `&str` literals, so the contracts stay alloc-free.
  * ------------------------------------------------------------------------- */
@@ -1816,9 +1818,9 @@ fn parse_infinity_text(
  * be the last character of the input. So NaN(1)2(3), NaN(1, NaN(1] and NaN() are
  * all rejected, and NaN[1] and NaN{1} are not this form at all.
  *
- * This spelling exists because C's own strtod reads
- * NAN(n-char-sequence), so the spelling reaches a caller from the platform
- * itself. The resemblance stops at the parentheses: strtod's sequence is
+ * This spelling exists because the platform's own strtod reads
+ * NAN(n-char-sequence), so it reaches a caller from the platform itself.
+ * The resemblance stops at the parentheses: strtod's sequence is
  * letters, digits and underscores read as an implementation-defined integer,
  * while a decimal128 payload is decimal digits.
  */
