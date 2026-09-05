@@ -9,6 +9,7 @@ rust-version = "1.85"
 
 [lib]
 name = "decimal128_text_codec"
+path = "src/decimal128_text_codec.rs"
 
 [features]
 # Compile-gated internal state assertions. Off by default: a consumer compiles
