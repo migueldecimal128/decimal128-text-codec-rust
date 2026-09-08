@@ -15,7 +15,7 @@ For the complete decimal128 implementation see `decimal128-rust` at
 
 ```rust
 use decimal128_text_codec::{
-    MAX_LEN, bid128_to_ascii, dpd128_to_ascii, bid128_parse, dpd128_parse,
+    MAX_LEN, QNAN, bid128_to_ascii, dpd128_to_ascii, bid128_parse, dpd128_parse,
 };
 
 // bits -> text, into the caller's buffer
@@ -23,9 +23,11 @@ let mut buf = [0u8; MAX_LEN];
 let s: &str = bid128_to_ascii(&mut buf, bits);
 let d: &str = dpd128_to_ascii(&mut buf, bits);
 
-// text -> bits
-let bits = bid128_parse("1.23E+45")?;
-let peer = dpd128_parse("1.23E+45")?;
+// text -> bits, into the caller's u128; None means success
+let mut bits = 0u128;
+let mut peer = 0u128;
+let err: Option<&'static str> = bid128_parse(&mut bits, "1.23E+45");
+let _ = dpd128_parse(&mut peer, "1.23E+45");
 ```
 
 An encoding is a `u128`: the sign bit is the top bit, and the rest is a
@@ -33,13 +35,22 @@ combination field and a trailing significand field laid out per IEEE 754-2019
 §3.5.2. That is the entire boundary; there is no value type, no context, no
 status flags.
 
-The sibling ports write the canonical positive quiet NaN into an out-parameter
-when a parse fails, so that a caller who ignores the failure still holds a
-legal IEEE 754-2019 datum. A `#[must_use]` `Result` enforces that at compile
-time instead — the value cannot be read without handling the error — so there
-is no ignoring caller left to protect. `QNAN` is exported for anyone who wants
-the sibling behaviour explicitly: `bid128_parse(text).unwrap_or(QNAN)`. The
-error message is human-readable; its exact wording is not part of the contract.
+The parsers return `None` on success and the failure message on failure,
+writing the encoding through an out-parameter — the same shape every sibling
+port has: `const char *` in C, `?[]const u8` in Zig, a nullable string in
+Swift, Java, Kotlin and C#. On failure they write the canonical positive quiet
+NaN, so a caller who ignores the return value still holds a legal
+IEEE 754-2019 datum rather than a stale one. `QNAN` is exported so that pattern
+can be named. The message is the engine's `ParseStatus` name for the failure —
+`EMPTY_STRING`, `INVALID_FORMAT`, `UNEXPECTED_CHAR`, `DOUBLE_DOT`,
+`NO_COEFFICIENT_DIGIT`, `NO_EXPONENT_DIGIT`, `INVALID_UNDERSCORE_LOCATION`,
+`FAILURE_PARSING_INFINITY`, `FAILURE_PARSING_NAN` — and the conformance suite
+asserts it against the shared corpus, so it is part of the contract.
+
+A `Result<u128, ParseError>` would be the more idiomatic Rust surface, and it
+would make the error impossible to ignore. It is deliberately not what this
+port does: the whole family agrees on what a parse failure is and on what a
+failed parse leaves behind, and this port does not get to disagree.
 
 The renderers write into a caller-owned `[u8; MAX_LEN]` and return a borrowed
 `&str` into it, so nothing here allocates, copies or frees. `MAX_LEN` is 42,
@@ -131,12 +142,12 @@ That is the whole suite, and the shape is deliberate: **every test vector in
 this repo comes from the shared corpus.** Nothing in the suite reaches past the
 public surface.
 
-One assertion the siblings make is absent, and it is a consequence of the
-`Result`: they check that a failed parse left the canonical quiet NaN in its
-out-parameter. There is no out-parameter here and no stale value a caller could
-read — the guarantee is type-level rather than runtime. The bits column of the
-`error` table is still asserted, against the exported `QNAN` constant, which
-validates that constant on 173 engine-authored rows.
+Every assertion the siblings make is made here, including the one on the
+`error` table's bits columns: that a failed parse left the canonical quiet NaN
+in the out-parameter. The out-parameter is seeded with a value that is neither
+`QNAN` nor any expected encoding first, so a parser that returned the message
+without writing is caught rather than passing on a coincidence. The exported
+`QNAN` constant is checked against the same 173 engine-authored rows.
 
 Corpus coverage, measured with `-C instrument-coverage`: **97.1% of lines**.
 What is left is the `impossible` path, the failure arms of the assertions, two
@@ -184,9 +195,9 @@ had the answer:
 - **`u128` is the public boundary**, as in Swift, C# and Zig. The internals
   still work in `dw1`/`dw0` `u64` pairs exactly as the reference does — split
   once on entry, joined once on exit.
-- **Parse returns `Result<u128, ParseError>`**; the finalize and parse chains
-  return tuples rather than writing through out-parameters, as Swift's and Go's
-  do.
+- **The finalize and parse chains return tuples** internally rather than
+  writing through out-parameters, as Swift's and Go's do. The published parsers
+  keep the family's out-parameter shape.
 - **The widening multiply is `u128` arithmetic.** The reference decomposes it
   into four 32×32 partial products because the JVM has no unsigned 64-bit
   multiply-high; the C port carries a three-way `__int128` / `__umulh` /

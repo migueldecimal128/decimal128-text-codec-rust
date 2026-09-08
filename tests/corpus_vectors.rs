@@ -66,91 +66,117 @@ fn parse_vectors_produce_both_encodings() {
     let rows = load_corpus(PARSE);
     assert_row_count(&rows, 1061, PARSE);
     for row in &rows {
-        match bid128_parse(&row.text) {
-            Err(e) => panic!(
+        let mut bits = 0u128;
+        if let Some(e) = bid128_parse(&mut bits, &row.text) {
+            panic!(
                 "parse line {}: bid rejected <{}>: {e}",
                 row.line_number, row.text
-            ),
-            Ok(bits) => assert!(
-                bits == row.bid,
-                "parse line {}: bid <{}> gave {}, expected {}",
-                row.line_number,
-                row.text,
-                hex32(bits),
-                row.bid_hex()
-            ),
+            );
         }
-        match dpd128_parse(&row.text) {
-            Err(e) => panic!(
+        assert!(
+            bits == row.bid,
+            "parse line {}: bid <{}> gave {}, expected {}",
+            row.line_number,
+            row.text,
+            hex32(bits),
+            row.bid_hex()
+        );
+        if let Some(e) = dpd128_parse(&mut bits, &row.text) {
+            panic!(
                 "parse line {}: dpd rejected <{}>: {e}",
                 row.line_number, row.text
-            ),
-            Ok(bits) => assert!(
-                bits == row.dpd,
-                "parse line {}: dpd <{}> gave {}, expected {}",
-                row.line_number,
-                row.text,
-                hex32(bits),
-                row.dpd_hex()
-            ),
+            );
         }
+        assert!(
+            bits == row.dpd,
+            "parse line {}: dpd <{}> gave {}, expected {}",
+            row.line_number,
+            row.text,
+            hex32(bits),
+            row.dpd_hex()
+        );
     }
 }
 
 /*
- * T4: malformed input. Both formats must reject and must agree on the reason.
+ * A value the out-parameter is seeded with before a parse that must fail. It is
+ * neither `QNAN` nor any encoding the corpus expects, so the post-condition
+ * check below is testing that the parser wrote, not that it happened to leave
+ * the right bits in place.
+ */
+const SEED: u128 = 0xDEAD_BEEF_DEAD_BEEF_DEAD_BEEF_DEAD_BEEF;
+
+/*
+ * T4: malformed input. Both formats must reject, must agree on the reason, and
+ * must leave the canonical positive quiet NaN behind in the out-parameter.
  *
- * The sibling ports assert a third thing here: that the failed parse left the
- * canonical positive quiet NaN in its out-parameter, which is why the corpus
- * carries that pattern in the bits columns of this table. This port returns a
- * `Result`, so there is no out-parameter to inspect and no stale value a caller
- * could read — the guarantee those ports assert at runtime is a type-level
- * property here. What the bits column still buys is the check below: the
- * corpus's failure pattern IS the `QNAN` constant this crate publishes for
- * callers who want the sibling behaviour explicitly. That validates the
- * constant against 173 engine-authored rows; it does not, and cannot, say
- * anything about the parse path.
+ * That third assertion is why the corpus carries that pattern in the bits
+ * columns of this table, and it is asserted here exactly as the sibling ports
+ * assert it — against `row.bid`, the engine-authored pattern, on all 173 rows.
+ * The out-parameter is seeded with a value that is neither the expected result
+ * nor `QNAN`, so a parser that returned the message without writing would be
+ * caught rather than passing on a coincidence.
+ *
+ * The two formats' failures are compared with `==` on the messages themselves,
+ * which is the siblings' `strcmp(bErr, dErr)` and not a proxy for it: a failure
+ * IS the message here, as it is there.
  */
 #[test]
 fn error_vectors_are_rejected_by_both_formats() {
     let rows = load_corpus(ERROR);
     assert_row_count(&rows, 173, ERROR);
     for row in &rows {
-        let bid = bid128_parse(&row.text);
-        let dpd = dpd128_parse(&row.text);
+        let mut bid_bits = SEED;
+        let mut dpd_bits = SEED;
+        let bid = bid128_parse(&mut bid_bits, &row.text);
+        let dpd = dpd128_parse(&mut dpd_bits, &row.text);
         assert!(
-            bid.is_err(),
+            bid.is_some(),
             "error line {}: bid ACCEPTED <{}>, corpus says {}",
             row.line_number,
             row.text,
             row.status
         );
         assert!(
-            dpd.is_err(),
+            dpd.is_some(),
             "error line {}: dpd ACCEPTED <{}>, corpus says {}",
             row.line_number,
             row.text,
             row.status
         );
-        if let Err(b) = bid {
+        if let Some(b) = bid {
             assert!(
-                b.message() == row.status,
+                b == row.status,
                 "error line {}: <{}> returned <{b}>, corpus says {}",
                 row.line_number,
                 row.text,
                 row.status
             );
         }
-        if let (Err(b), Err(d)) = (bid, dpd) {
-            // Compared through `message()` rather than by value: the sibling
-            // ports' errors ARE strings, and this is their `strcmp(bErr, dErr)`.
+        if let (Some(b), Some(d)) = (bid, dpd) {
             assert!(
-                b.message() == d.message(),
+                b == d,
                 "error line {}: the formats disagree on <{}>: <{b}> vs <{d}>",
                 row.line_number,
                 row.text
             );
         }
+        assert!(
+            bid_bits == row.bid,
+            "error line {}: bid rejected <{}> but left {}, corpus says {}",
+            row.line_number,
+            row.text,
+            hex32(bid_bits),
+            row.bid_hex()
+        );
+        assert!(
+            dpd_bits == row.dpd,
+            "error line {}: dpd rejected <{}> but left {}, corpus says {}",
+            row.line_number,
+            row.text,
+            hex32(dpd_bits),
+            row.dpd_hex()
+        );
         assert!(
             QNAN == row.bid,
             "error line {}: the corpus failure pattern is {}, but QNAN is {}",
@@ -232,34 +258,35 @@ fn run_decode_table(rows: &[CorpusRow], label: &str) {
 /// Round-trippable rows: the text must encode back to the same bits.
 fn run_encode_table(rows: &[CorpusRow], label: &str) {
     for row in rows {
-        match bid128_parse(&row.text) {
-            Err(e) => panic!(
+        let mut bits = 0u128;
+        if let Some(e) = bid128_parse(&mut bits, &row.text) {
+            panic!(
                 "{label} line {}: bid rejected <{}>: {e}",
                 row.line_number, row.text
-            ),
-            Ok(bits) => assert!(
-                bits == row.bid,
-                "{label} line {}: bid <{}> gave {}, expected {}",
-                row.line_number,
-                row.text,
-                hex32(bits),
-                row.bid_hex()
-            ),
+            );
         }
-        match dpd128_parse(&row.text) {
-            Err(e) => panic!(
+        assert!(
+            bits == row.bid,
+            "{label} line {}: bid <{}> gave {}, expected {}",
+            row.line_number,
+            row.text,
+            hex32(bits),
+            row.bid_hex()
+        );
+        if let Some(e) = dpd128_parse(&mut bits, &row.text) {
+            panic!(
                 "{label} line {}: dpd rejected <{}>: {e}",
                 row.line_number, row.text
-            ),
-            Ok(bits) => assert!(
-                bits == row.dpd,
-                "{label} line {}: dpd <{}> gave {}, expected {}",
-                row.line_number,
-                row.text,
-                hex32(bits),
-                row.dpd_hex()
-            ),
+            );
         }
+        assert!(
+            bits == row.dpd,
+            "{label} line {}: dpd <{}> gave {}, expected {}",
+            row.line_number,
+            row.text,
+            hex32(bits),
+            row.dpd_hex()
+        );
     }
 }
 

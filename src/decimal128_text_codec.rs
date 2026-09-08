@@ -70,11 +70,9 @@
 //! `core`; nothing needs an operating system.
 
 /*
- * Everything reachable from outside is the four functions and the error type at
- * the bottom of this file; the rest is private to the crate.
+ * Everything reachable from outside is the four functions at the bottom of this
+ * file; the rest is private to the crate.
  */
-
-use core::fmt;
 
 /* ---------------------------------------------------------------------------
  * Internal-state assertions
@@ -1536,52 +1534,31 @@ fn round_and_finalize_finite(
  * text -> bits
  * ------------------------------------------------------------------------ */
 
-/// The reason a decimal character sequence could not be parsed.
-///
-/// The message is human-readable and its exact wording is **not** part of the
-/// contract; it may change between versions. What is contractual is that the
-/// two formats reject the same inputs for the same reason, so a `ParseError`
-/// from [`bid128_parse`] compares equal to the one from [`dpd128_parse`] on the
-/// same input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParseError {
-    message: &'static str,
-}
-
-impl ParseError {
-    /// The human-readable message. Not part of the contract; see the type docs.
-    #[must_use]
-    pub const fn message(&self) -> &'static str {
-        self.message
-    }
-}
-
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message)
-    }
-}
-
-impl core::error::Error for ParseError {}
-
-const fn parse_error(message: &'static str) -> ParseError {
-    ParseError { message }
-}
-
 /*
- * The parse failures, one value each. Sharing one value per failure is what
- * lets the corpus assert that the two formats reject an input for the same
- * reason.
+ * The parse failures, one message each.
+ *
+ * A failure crosses the API as the message itself, exactly as it does in every
+ * sibling port: C hands back a `const char *`, Zig a `?[]const u8`, and Swift,
+ * Java, Kotlin and C# a nullable string. The text is the engine's ParseStatus
+ * name for the failure and the conformance suite asserts it against the shared
+ * corpus, so it is part of the contract rather than an incidental wording.
+ *
+ * These are `&'static str` rather than a dedicated error type on purpose. A
+ * `ParseError` would be the more idiomatic Rust surface, but it would also be
+ * the only place this port disagrees with its siblings about what a parse
+ * failure IS, and the corpus compares the two formats' failures the way the
+ * siblings do -- `strcmp(bErr, dErr)`, spelled here as `==` on two `&str`.
+ * Sharing one constant per failure is what lets that comparison hold.
  */
-const ERR_EMPTY_STRING: ParseError = parse_error("EMPTY_STRING");
-const ERR_INVALID_FORMAT: ParseError = parse_error("INVALID_FORMAT");
-const ERR_UNEXPECTED_CHAR: ParseError = parse_error("UNEXPECTED_CHAR");
-const ERR_DOUBLE_RADIX_DOT: ParseError = parse_error("DOUBLE_DOT");
-const ERR_NO_COEFFICIENT_DIGIT: ParseError = parse_error("NO_COEFFICIENT_DIGIT");
-const ERR_NO_EXPONENT_DIGIT: ParseError = parse_error("NO_EXPONENT_DIGIT");
-const ERR_UNDERSCORE_LOCATION: ParseError = parse_error("INVALID_UNDERSCORE_LOCATION");
-const ERR_PARSING_INFINITY: ParseError = parse_error("FAILURE_PARSING_INFINITY");
-const ERR_PARSING_NAN: ParseError = parse_error("FAILURE_PARSING_NAN");
+const ERR_EMPTY_STRING: &str = "EMPTY_STRING";
+const ERR_INVALID_FORMAT: &str = "INVALID_FORMAT";
+const ERR_UNEXPECTED_CHAR: &str = "UNEXPECTED_CHAR";
+const ERR_DOUBLE_RADIX_DOT: &str = "DOUBLE_DOT";
+const ERR_NO_COEFFICIENT_DIGIT: &str = "NO_COEFFICIENT_DIGIT";
+const ERR_NO_EXPONENT_DIGIT: &str = "NO_EXPONENT_DIGIT";
+const ERR_UNDERSCORE_LOCATION: &str = "INVALID_UNDERSCORE_LOCATION";
+const ERR_PARSING_INFINITY: &str = "FAILURE_PARSING_INFINITY";
+const ERR_PARSING_NAN: &str = "FAILURE_PARSING_NAN";
 
 /*
  * The code of the byte at `index`, or -1 past the end of the slice.
@@ -1631,7 +1608,7 @@ fn parse_finite_value_text(
     ch_first: i32,
     bytes: &[u8],
     start_pos: usize,
-) -> Result<(u64, u64), ParseError> {
+) -> Result<(u64, u64), &'static str> {
     let mut pos = start_pos;
     let mut residue = EXACT;
 
@@ -1783,7 +1760,7 @@ fn parse_infinity_text(
     ch_first: i32,
     bytes: &[u8],
     start_pos: usize,
-) -> Result<(u64, u64), ParseError> {
+) -> Result<(u64, u64), &'static str> {
     let mut ch = ch_first;
     let mut ch_prev_code = 0i32;
     const TARGET: &[u8; 8] = b"infinity";
@@ -1830,7 +1807,7 @@ fn parse_nan_text(
     ch_first: i32,
     bytes: &[u8],
     start_pos: usize,
-) -> Result<(u64, u64), ParseError> {
+) -> Result<(u64, u64), &'static str> {
     let mut pos = start_pos;
     let mut ch = ch_first;
     let has_s = (ch | 0x20) == i32::from(b's');
@@ -1923,7 +1900,7 @@ fn parse_nan_text(
 }
 
 /// Read the optional sign, then dispatch on the leading character.
-fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64), ParseError> {
+fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64), &'static str> {
     let mut pos = 0;
     let ch_first = code_at(bytes, pos);
     pos += 1;
@@ -1955,12 +1932,11 @@ fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64
 
 /// The canonical positive quiet NaN.
 ///
-/// An out-parameter API would write this on a failed parse, so that a caller
-/// who ignores the failure still holds a legal IEEE 754-2019 datum. Here the
-/// `Result` makes that impossible to need — but the constant is what a caller
-/// wanting the same behaviour reaches for:
-/// `bid128_parse(text).unwrap_or(QNAN)`. It is the same bit pattern in both
-/// formats.
+/// This is what [`bid128_parse`] and [`dpd128_parse`] write to their
+/// out-parameter when a parse fails, so that a caller who ignores the returned
+/// message still holds a legal IEEE 754-2019 datum rather than a stale one. It
+/// is exported so a caller can name that pattern — to test for it, or to seed
+/// a variable with it — and it is the same bit pattern in both formats.
 pub const QNAN: u128 = (QNAN_PATTERN_HI as u128) << 64;
 
 /// View the written prefix of a render buffer as text.
@@ -2061,16 +2037,15 @@ pub fn dpd128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 
 /// Parse a decimal character sequence into a BID128 encoding.
 ///
-/// Returns the encoding on success, or a `ParseError` on failure. An
-/// out-parameter API would write the canonical positive quiet NaN in that case,
-/// so a caller who ignores the failure still holds a legal IEEE 754-2019 datum;
-/// here the `Result` makes that unnecessary, and `QNAN` is available for a
-/// caller who wants the same behaviour explicitly. The error's message is human-readable;
-/// its text is the engine's ParseStatus name for the failure --
-/// EMPTY_STRING, INVALID_FORMAT, UNEXPECTED_CHAR, DOUBLE_DOT,
-/// NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT, INVALID_UNDERSCORE_LOCATION,
-/// FAILURE_PARSING_INFINITY or FAILURE_PARSING_NAN -- and the conformance
-/// suite asserts it against the shared corpus, so it is part of the contract.
+/// Returns `None` on success, with the encoding written to `out`. On failure
+/// returns a human-readable message and writes the canonical positive quiet
+/// NaN, so a caller who ignores the return value still holds a legal
+/// IEEE 754-2019 datum rather than a stale one. The message is the engine's
+/// ParseStatus name for the failure -- EMPTY_STRING, INVALID_FORMAT,
+/// UNEXPECTED_CHAR, DOUBLE_DOT, NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT,
+/// INVALID_UNDERSCORE_LOCATION, FAILURE_PARSING_INFINITY or
+/// FAILURE_PARSING_NAN -- asserted against the shared corpus by the
+/// conformance suite, so it is part of the contract.
 ///
 /// Accepted input:
 ///
@@ -2104,33 +2079,31 @@ pub fn dpd128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 /// format, and the canonical positive quiet NaN is the same bit pattern in
 /// both.
 ///
-/// # Errors
-///
-/// Returns `ParseError` when the text is not a decimal character sequence.
-///
 /// ```
-/// # use decimal128_text_codec::{MAX_LEN, bid128_parse, bid128_to_ascii};
-/// let bits = bid128_parse("6.02E+23").unwrap();
+/// # use decimal128_text_codec::{MAX_LEN, QNAN, bid128_parse, bid128_to_ascii};
+/// let mut bits = 0u128;
+/// assert_eq!(bid128_parse(&mut bits, "6.02E+23"), None);
 /// let mut buf = [0u8; MAX_LEN];
 /// assert_eq!(bid128_to_ascii(&mut buf, bits), "6.02E+23");
-/// assert!(bid128_parse("1_").is_err());
+///
+/// assert_eq!(bid128_parse(&mut bits, "1_"), Some("INVALID_UNDERSCORE_LOCATION"));
+/// assert_eq!(bits, QNAN); // the failed parse left a legal datum behind
 /// ```
-pub fn bid128_parse(text: &str) -> Result<u128, ParseError> {
-    parse_into(true, text)
+pub fn bid128_parse(out: &mut u128, text: &str) -> Option<&'static str> {
+    parse_into(true, out, text)
 }
 
 /// Parse a decimal character sequence into a DPD128 encoding.
 ///
-/// Returns the encoding on success, or a `ParseError` on failure. An
-/// out-parameter API would write the canonical positive quiet NaN in that case,
-/// so a caller who ignores the failure still holds a legal IEEE 754-2019 datum;
-/// here the `Result` makes that unnecessary, and `QNAN` is available for a
-/// caller who wants the same behaviour explicitly. The error's message is human-readable;
-/// its text is the engine's ParseStatus name for the failure --
-/// EMPTY_STRING, INVALID_FORMAT, UNEXPECTED_CHAR, DOUBLE_DOT,
-/// NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT, INVALID_UNDERSCORE_LOCATION,
-/// FAILURE_PARSING_INFINITY or FAILURE_PARSING_NAN -- and the conformance
-/// suite asserts it against the shared corpus, so it is part of the contract.
+/// Returns `None` on success, with the encoding written to `out`. On failure
+/// returns a human-readable message and writes the canonical positive quiet
+/// NaN, so a caller who ignores the return value still holds a legal
+/// IEEE 754-2019 datum rather than a stale one. The message is the engine's
+/// ParseStatus name for the failure -- EMPTY_STRING, INVALID_FORMAT,
+/// UNEXPECTED_CHAR, DOUBLE_DOT, NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT,
+/// INVALID_UNDERSCORE_LOCATION, FAILURE_PARSING_INFINITY or
+/// FAILURE_PARSING_NAN -- asserted against the shared corpus by the
+/// conformance suite, so it is part of the contract.
 ///
 /// Accepted input:
 ///
@@ -2164,21 +2137,35 @@ pub fn bid128_parse(text: &str) -> Result<u128, ParseError> {
 /// format, and the canonical positive quiet NaN is the same bit pattern in
 /// both.
 ///
-/// # Errors
-///
-/// Returns `ParseError` when the text is not a decimal character sequence.
-///
 /// ```
-/// # use decimal128_text_codec::{MAX_LEN, dpd128_parse, dpd128_to_ascii};
-/// let bits = dpd128_parse("6.02E+23").unwrap();
+/// # use decimal128_text_codec::{MAX_LEN, QNAN, dpd128_parse, dpd128_to_ascii};
+/// let mut bits = 0u128;
+/// assert_eq!(dpd128_parse(&mut bits, "6.02E+23"), None);
 /// let mut buf = [0u8; MAX_LEN];
 /// assert_eq!(dpd128_to_ascii(&mut buf, bits), "6.02E+23");
-/// assert!(dpd128_parse("1_").is_err());
+///
+/// assert_eq!(dpd128_parse(&mut bits, "1_"), Some("INVALID_UNDERSCORE_LOCATION"));
+/// assert_eq!(bits, QNAN); // the failed parse left a legal datum behind
 /// ```
-pub fn dpd128_parse(text: &str) -> Result<u128, ParseError> {
-    parse_into(false, text)
+pub fn dpd128_parse(out: &mut u128, text: &str) -> Option<&'static str> {
+    parse_into(false, out, text)
 }
 
-fn parse_into(format_is_bid: bool, text: &str) -> Result<u128, ParseError> {
-    encode_string_or_error(format_is_bid, text.as_bytes()).map(|(hi, lo)| join_words(hi, lo))
+/*
+ * `out` is written on both paths -- the encoding on success, `QNAN` on failure
+ * -- so the caller never reads back what was there before the call. That is the
+ * siblings' contract, and it is the reason a failure is reported beside the
+ * value rather than in place of it.
+ */
+fn parse_into(format_is_bid: bool, out: &mut u128, text: &str) -> Option<&'static str> {
+    match encode_string_or_error(format_is_bid, text.as_bytes()) {
+        Ok((hi, lo)) => {
+            *out = join_words(hi, lo);
+            None
+        }
+        Err(message) => {
+            *out = QNAN;
+            Some(message)
+        }
+    }
 }
