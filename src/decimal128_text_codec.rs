@@ -1272,8 +1272,8 @@ fn fnz_to_normalized_scientific_ascii(
 
 /*
  * Finite non-zero: pick the form. Integer when the quantum exponent is zero,
- * fixed-point when the adjusted exponent is at least -6, scientific
- * otherwise -- the GDAS auto-select rule.
+ * fixed-point when it is negative and the adjusted exponent is at least -6,
+ * scientific otherwise -- the GDAS auto-select rule.
  */
 fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
     let digit_len = calc_digit_len_128(dw1, dw0);
