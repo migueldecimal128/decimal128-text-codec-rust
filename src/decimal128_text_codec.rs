@@ -1537,18 +1537,17 @@ fn round_and_finalize_finite(
 /*
  * The parse failures, one message each.
  *
- * A failure crosses the API as the message itself, exactly as it does in every
- * sibling port: C hands back a `const char *`, Zig a `?[]const u8`, and Swift,
- * Java, Kotlin and C# a nullable string. The text is the engine's ParseStatus
- * name for the failure and the conformance suite asserts it against the shared
- * corpus, so it is part of the contract rather than an incidental wording.
+ * A failure crosses the API as the message itself. The text is the engine's
+ * ParseStatus name for the failure and the conformance suite asserts it against
+ * the shared corpus, so the wording is the contract rather than an incidental
+ * choice.
  *
- * These are `&'static str` rather than a dedicated error type on purpose. A
- * `ParseError` would be the more idiomatic Rust surface, but it would also be
- * the only place this port disagrees with its siblings about what a parse
- * failure IS, and the corpus compares the two formats' failures the way the
- * siblings do -- `strcmp(bErr, dErr)`, spelled here as `==` on two `&str`.
- * Sharing one constant per failure is what lets that comparison hold.
+ * These are `&'static str` rather than a dedicated error type on purpose. An
+ * error type would be the more idiomatic surface, but what the corpus pins down
+ * is the ParseStatus name, and wrapping it puts a layer between the contract
+ * and the thing that states it. Sharing one constant per failure is also what
+ * lets the two formats' failures be compared directly: the same input must be
+ * rejected for the same reason in both, and that check is `==` on two `&str`.
  */
 const ERR_EMPTY_STRING: &str = "EMPTY_STRING";
 const ERR_INVALID_FORMAT: &str = "INVALID_FORMAT";
@@ -2153,9 +2152,9 @@ pub fn dpd128_parse(out: &mut u128, text: &str) -> Option<&'static str> {
 
 /*
  * `out` is written on both paths -- the encoding on success, `QNAN` on failure
- * -- so the caller never reads back what was there before the call. That is the
- * siblings' contract, and it is the reason a failure is reported beside the
- * value rather than in place of it.
+ * -- so the caller never reads back what was there before the call. That is why
+ * a failure is reported beside the value rather than in place of it: a caller
+ * who discards the message still holds a legal IEEE 754-2019 datum.
  */
 fn parse_into(format_is_bid: bool, out: &mut u128, text: &str) -> Option<&'static str> {
     match encode_string_or_error(format_is_bid, text.as_bytes()) {
