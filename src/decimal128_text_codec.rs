@@ -2134,20 +2134,12 @@ fn parse_nan_text(
             pos += 1;
         }
         if accum_digit_count == 0 {
-            return Err(if has_paren {
-                ERR_PARSING_NAN
-            } else {
-                ERR_PARSING_NAN
-            });
+            return Err(ERR_PARSING_NAN);
         }
         if has_paren {
             // the ')' must be present and must end the input
             if ch != i32::from(b')') {
-                return Err(if ch == -1 {
-                    ERR_PARSING_NAN
-                } else {
-                    ERR_PARSING_NAN
-                });
+                return Err(ERR_PARSING_NAN);
             }
             if code_at(bytes, pos) != -1 {
                 return Err(ERR_PARSING_NAN);
