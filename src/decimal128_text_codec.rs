@@ -1196,7 +1196,7 @@ fn fnz_to_normalized_scientific_ascii(
 ) -> usize {
     verify!(digit_len > 0);
     let e_exp = q_exp + (digit_len as i32 - 1);
-    let e_exp_abs = e_exp.unsigned_abs();
+    let e_exp_abs = if e_exp < 0 { -e_exp } else { e_exp };
     let sign_len = usize::from(sign);
     let decimal_point_len = usize::from(digit_len > 1);
     let exp_e_len = 1;
