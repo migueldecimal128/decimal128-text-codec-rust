@@ -101,10 +101,11 @@
  * Messages are `&str` literals, so the contracts stay alloc-free.
  * ------------------------------------------------------------------------- */
 
-/// Unconditional abort marking unreachable code. Returns the never type `!`.
+/// Unconditional abort marking unreachable code.
 #[inline(always)]
 #[track_caller]
 fn impossible(message: &str) -> ! {
+    // Returns the never type !.
     panic!("decimal128-text-codec: impossible state: {message}")
 }
 
@@ -383,12 +384,10 @@ fn as_str(bytes: &[u8]) -> &str {
     impossible("the renderer wrote a non-ASCII byte")
 }
 
-/*
- * `out` is written on both paths -- the encoding on success, `QNAN` on failure
- * -- so the caller never reads back what was there before the call. That is why
- * a failure is reported beside the value rather than in place of it: a caller
- * who discards the message still holds a legal IEEE 754-2019 datum.
- */
+/// The encoding is written on both paths -- the encoding on success, the canonical positive
+/// quiet NaN on failure -- so the caller never reads back what was there before the call. That
+/// is why a failure is reported beside the value rather than in place of it: a caller who
+/// discards the message still holds a legal IEEE 754-2019 datum.
 fn parse_into(out: &mut u128, format_is_bid: bool, str: &str) -> Option<&'static str> {
     let result = encode_string_or_error(format_is_bid, str.as_bytes());
     if let Ok((hi, lo)) = result {
@@ -612,7 +611,7 @@ fn join_words(hi: u64, lo: u64) -> u128 {
  * Low-level unsigned arithmetic
  * ---------------------------------------------------------------------- */
 
-/// High 64 bits of the 128-bit product `x * y`.
+/// Compute the high 64 bits of the 128-bit unsigned product `x * y`.
 #[inline(always)]
 fn mulhi64(x: u64, y: u64) -> u64 {
     (((x as u128) * (y as u128)) >> 64) as u64
@@ -624,7 +623,8 @@ fn clz64(v: u64) -> u32 {
     v.leading_zeros()
 }
 
-/// Bit length of a 128-bit value: highest set bit plus one, 0 for zero.
+/// Compute the bit-length of a 128-bit unsigned value: the position of the highest set bit,
+/// plus one. Returns 0 for the zero value.
 fn calc_bit_len_128(dw1: u64, dw0: u64) -> u32 {
     if dw1 != 0 {
         return 128 - clz64(dw1);
@@ -635,13 +635,10 @@ fn calc_bit_len_128(dw1: u64, dw0: u64) -> u32 {
     0
 }
 
-/*
- * Decimal digit count of a 128-bit value.
- *
- * (bit_len * 1233) >> 12 is floor(bit_len * log10(2)), which is either the exact
- * digit count or one too small; a single unsigned compare against the
- * next-larger power of ten resolves the off-by-one.
- */
+/// Compute the decimal digit count of a 128-bit unsigned value. Uses the standard log10/log2
+/// approximation: for any non-zero `bit_len`, `(bit_len * 1233) >> 12` is `floor(bit_len *
+/// log10(2))`, which is either the exact digit count or one too small. A single unsigned
+/// 128-bit compare against the next-larger power of 10 in `POW10` resolves the off-by-one.
 fn calc_digit_len_128(dw1: u64, dw0: u64) -> usize {
     let bit_len = calc_bit_len_128(dw1, dw0) as usize;
     let lo_digit_count = (bit_len * 1233) >> 12;
@@ -663,7 +660,8 @@ fn calc_digit_len_128(dw1: u64, dw0: u64) -> usize {
     }
 }
 
-/// Multiply a 64-bit value by 10^pow10 and add `a`, returning the 128-bit result.
+/// Multiply a 64-bit unsigned value `x` by `10^pow10` and add a 64-bit integer `a`, producing
+/// the 128-bit result.
 fn u128_fma_pow10(x: u64, pow10: usize, a: u64) -> (u64, u64) {
     let y = POW10[pow10 << 1];
     // This product is relied on to wrap past 64 bits, and recovers
@@ -679,14 +677,10 @@ fn u128_fma_pow10(x: u64, pow10: usize, a: u64) -> (u64, u64) {
  * The divide kernel
  * ---------------------------------------------------------------------- */
 
-/*
- * Divide a 113-bit value by 10^pow10 for pow10 in 1..=9, returning the quotient
- * and the remainder.
- *
- * Table-free: 10^pow10 factors as 2^pow10 * 5^pow10, so the low pow10 bits fall
- * straight out as the low part of the remainder and the shifted value is divided
- * by 5^pow10 with two hardware 64-bit divides.
- */
+/// Divide a 113-bit unsigned coefficient by `10^pow10` for `pow10` in 1..9, producing the
+/// quotient and the remainder. Factors `10^pow10` as `2^pow10 * 5^pow10`: the low `pow10` bits
+/// are extracted directly as the low part of the remainder, then the shifted value is divided
+/// by `5^pow10` using two hardware 64-bit divides.
 fn u113_div_mod_pow10_max9(dw_hi: u64, dw_lo: u64, pow10: u32) -> (u64, u64, u64) {
     verify!(
         (1..=9).contains(&pow10),
@@ -719,21 +713,26 @@ fn u113_div_mod_pow10_max9(dw_hi: u64, dw_lo: u64, pow10: u32) -> (u64, u64, u64
  * Residue -- how much was discarded, relative to half a ulp
  * ---------------------------------------------------------------------- */
 
+/// Classify a single discarded decimal digit (0..9) as `EXACT`, `LT_HALF`, `HALF`, or `GT_HALF`
+/// via lookup in `DIGIT_MAP`.
 fn residue_from_decimal_digit(digit: u32) -> i32 {
     ((DIGIT_MAP >> (digit << 1)) & 0x03) as i32
 }
 
-/*
- * Combine a primary residue with a sticky one from less-significant digits,
- * round-bit-and-sticky-bit style: the sticky residue collapses to a single
- * nonzero bit which is OR'd into the low bit of the round residue.
- */
+/// Combine a primary `round_residue` with a `sticky_residue` from less-significant digits, in
+/// the round-bit-and-sticky-bit style. The sticky residue is collapsed to a single "nonzero"
+/// bit and OR'd into the low bit of the round residue.
 fn residue_merge(round_residue: i32, sticky_residue: i32) -> i32 {
     let s = (sticky_residue & 1) | (sticky_residue >> 1);
     (round_residue | s) & 0x03
 }
 
-/// Classify a 128-bit value relative to half of 10^pow10.
+/// Classify a 128-bit unsigned value relative to half of `10^pow10`, returning one of `EXACT`,
+/// `LT_HALF`, `HALF`, or `GT_HALF`. Used in the underflow boundary case where the entire
+/// coefficient is being discarded by truncation: the residue is determined by where the
+/// coefficient falls relative to half-of-the-truncation-divisor. Looks up `10^pow10` in the
+/// `POW10` table, halves it via a 128-bit shift right by 1, and compares against the input as
+/// an unsigned 128-bit value.
 fn residue_from_value_pow10(dw1: u64, dw0: u64, pow10: usize) -> i32 {
     if (dw1 | dw0) == 0 {
         return EXACT;
@@ -753,10 +752,9 @@ fn residue_from_value_pow10(dw1: u64, dw0: u64, pow10: usize) -> i32 {
     TIE_HALF
 }
 
-/*
- * Divide a 128-bit coefficient by 10^truncation_needed, in chunks of at most
- * nine digits, returning the quotient and the accumulated residue class.
- */
+/// Divide a 128-bit unsigned coefficient by `10^truncation_needed`, producing the quotient and
+/// the round-and-sticky residue class of what was discarded. Truncates in chunks of up to 9
+/// digits via `u113_div_mod_pow10_max9`.
 fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, u64, i32) {
     verify!(
         (dw1 | dw0) != 0,
@@ -796,15 +794,12 @@ fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, 
  * rather than lookup tables.
  * ------------------------------------------------------------------------ */
 
-/*
- * Decode a 10-bit declet (bits p q r s t u v w x y) into 0..=999. Accepts the
- * 24 non-canonical declets as well as the 1000 canonical ones.
- *
- * A complement of `t` is spelled `& !t` here: on operands already reduced to 0
- * or 1 it agrees with `!`, and the complemented bits are masked away either
- * way.
- */
+/// Decode a 10-bit DPD declet (bits 9..0) into 0..999. Mapping: bit9..bit0 as p q r s t u v w x
+/// y. Accepts the 24 non-canonical declets as well as the 1000 canonical ones, per Cowlishaw's
+/// dpd2bcd.
 fn dpd_decode_declet(declet: u64) -> u64 {
+    // A complement of t is spelled & !t here: on operands already reduced to 0 or 1 it agrees
+    // with !, and the complemented bits are masked away either way.
     verify!(declet <= 1023, "the declet is 10 bits");
 
     if declet == 0 {
@@ -850,8 +845,10 @@ fn dpd_decode_declet(declet: u64) -> u64 {
     d2 * 100 + d1 * 10 + d0
 }
 
-/// Encode 0..=999 into a 10-bit declet. The inverse of [`dpd_decode_declet`]
-/// over the canonical declets.
+/// Encode 0..999 into a 10-bit DPD declet, per Cowlishaw's bcd2dpd. The inverse of
+/// `dpd_decode_declet` over canonical declets. Non-canonical declets decode to a value that
+/// re-encodes to the canonical declet for that value, so `encode(decode(x)) == x` only for
+/// canonical x.
 fn dpd_encode_declet(n: u64) -> u64 {
     verify!(n <= 999, "the value fits three decimal digits");
 
@@ -908,11 +905,9 @@ fn dpd_encode_declet(n: u64) -> u64 {
         | y
 }
 
-/*
- * Decode up to seven packed declets into a binary integer. Declets are ten bits
- * each, least significant first; the topmost may be narrower, which is how the
- * coefficient's leading digit rides along -- 0..=9 encodes to itself.
- */
+/// Decode up to seven packed DPD declets into a binary integer. Declets are ten bits each,
+/// least significant first. The topmost may be narrower than ten bits, which is how the
+/// coefficient's leading digit is carried: 0..9 encodes to itself as a declet.
 fn bin_from_declets(declets: u64) -> u64 {
     let mut bin: u64 = 0;
     let mut rest = declets;
@@ -927,8 +922,8 @@ fn bin_from_declets(declets: u64) -> u64 {
     bin
 }
 
-/// Encode a value of at most 18 digits into six packed declets, least
-/// significant first. The inverse of [`bin_from_declets`] over that range.
+/// Encode a binary integer of at most 18 digits into six packed declets, least significant
+/// first. The inverse of `bin_from_declets` over that range.
 fn declets_from_bin(bin: u64) -> u64 {
     verify!(bin < TEN_POW_18, "the value fits eighteen decimal digits");
     let mut rest = bin;
@@ -947,13 +942,12 @@ fn declets_from_bin(bin: u64) -> u64 {
  * Rendering integers into ASCII
  * ---------------------------------------------------------------------- */
 
-/*
- * Render exactly 8 decimal digits of `dw`, ending at `off_maxx`. Zero-pads. The
- * caller guarantees dw < 10^8 and that the 8 bytes are inside the buffer.
- *
- * A binary cascade: one divide by 10^4 to split into halves, two by 10^2 to
- * split those into pairs, four by 10 for the digits.
- */
+/// Render exactly 8 decimal digits of `dw` into `ascii`, ending at `off_maxx`. Caller must
+/// ensure `dw < 10^8`; the function pads with leading zeros if `dw` has fewer than 8
+/// significant digits. Implemented as a binary cascade: / 10^4 once to split into two 4-digit
+/// halves, then / 10^2 twice to split each half into two 2-digit pairs, then / 10 four times to
+/// extract individual digits. Always writes exactly 8 bytes at offsets `off_maxx - 8` through
+/// `off_maxx - 1`.
 fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
     let abcd = mulhi64(dw, M_U64_DIV_1E4) >> S_U64_DIV_1E4;
     let efgh = dw - (abcd * 10000);
@@ -986,11 +980,17 @@ fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
     ascii[off_maxx - 1] = b'0' + h as u8;
 }
 
-/*
- * Render exactly `render_digit_count` digits of `dw`, ending at `off_maxx`,
- * zero-padded. Four digits per iteration while at least four remain, then one
- * at a time.
- */
+/// Render exactly `render_digit_count` decimal digits of `dw` into `ascii`, ending at
+/// `off_maxx`. Pads with leading zeros if `dw` has fewer significant digits than
+/// `render_digit_count`. Two phases:
+///
+/// - While at least 4 digits remain: peel 4 digits per iteration via / 10^4 followed by a
+///   2-digit / 1-digit cascade.
+/// - For the remaining 0..3 digits: peel one digit at a time via / 10 through reciprocal
+///   multiplication.
+///
+/// Always writes exactly `render_digit_count` bytes at offsets `off_maxx - render_digit_count`
+/// through `off_maxx - 1`.
 fn render_tail_digits_before_index(
     render_digit_count: usize,
     dw: u64,
@@ -1031,14 +1031,17 @@ fn render_tail_digits_before_index(
     );
 }
 
-/*
- * Render a 128-bit value as `digit_print_count` decimal digits, ending at
- * `off + digit_print_count`.
- *
- * Three phases: while the high word is live, peel 8 digits per iteration via
- * three divides by 10^8 across rotating 96-bit chunks; once it fits in 64 bits,
- * one divide by 10^8 per 8 digits; then the 1..=7 leftover digits.
- */
+/// Render a 128-bit unsigned integer as `digit_print_count` decimal digits into `ascii`, ending
+/// at offset `off + digit_print_count`. Three phases:
+///
+/// - While `dw1_t != 0`: peel 8 digits per outer iteration via three / 10^8 divisions on
+///   rotating 96-bit chunks, using `mulhi64` for the high half of each multi-word divide.
+/// - Once the value fits in 64 bits: peel 8 digits at a time via a single / 10^8 per iteration.
+/// - For 1..7 leftover digits: delegate to `render_tail_digits_before_index`.
+///
+/// Each 8-digit chunk is rendered by `render8_digits_before_index`. The caller must have
+/// allocated a buffer with at least `off + digit_print_count` bytes, and is responsible for any
+/// leading-zero padding outside the rendered range.
 fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8], off: usize) {
     let mut dw1_t = dw1;
     let mut dw0_t = dw0;
@@ -1072,10 +1075,11 @@ fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8],
     }
 }
 
-/// Write a signed decimal integer; returns the number of bytes written.
-/// `core` has no integer-to-bytes helper, and routing this through `fmt` would
-/// pull the formatting machinery into the render path for one call site.
+/// Write a signed decimal exponent at `off`, returning its length. The magnitude never exceeds
+/// 6176, so it is at most four digits.
 fn append_int(out: &mut [u8], v: i32) -> usize {
+    // core has no integer-to-bytes helper, and routing this through fmt would pull the
+    // formatting machinery into the render path for one call site.
     let mut sign_len = 0;
     let magnitude = v.unsigned_abs();
     if v < 0 {
@@ -1166,7 +1170,8 @@ fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     base_len + append_int(&mut out[base_len..], q_exp)
 }
 
-/// `q_exp == 0`: a plain integer, no radix point and no exponent.
+/// Format a finite non-zero value with qExp == 0 as a plain integer sequence: no radix point,
+/// no exponent.
 fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, dw0: u64) -> usize {
     verify!(
         digit_len > 0,
@@ -1179,10 +1184,10 @@ fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, 
     total_len
 }
 
-/*
- * Fixed-point form: leading zeros, then the coefficient digits shifted right by
- * one position to make room for the radix point.
- */
+/// Format a finite non-zero value in fixed-point notation, with an explicit radix point and the
+/// appropriate number of leading zeros -- "0.00012345". Renders the coefficient digits, then
+/// shifts the trailing digits right by one position to open a slot for the radix point. Leading
+/// zeros are written directly into the buffer before the digits.
 fn fnz_to_decimal_point_ascii(
     out: &mut [u8],
     sign: bool,
@@ -1218,10 +1223,11 @@ fn fnz_to_decimal_point_ascii(
     total_len
 }
 
-/*
- * Normalized scientific form. The exponent sign is always written, per the GDAS
- * to-scientific-string form: 1.234E+5, never 1.234E5.
- */
+/// Format a finite non-zero value in normalized scientific notation -- "1.234E+5",
+/// "-9.99E-200". Renders the coefficient digits, inserts a radix point after the leading digit
+/// when there is more than one, then appends E, the exponent sign and the absolute exponent.
+/// The sign is always written: + for non-negative exponents, - for negative, per the GDAS
+/// to-scientific-string form.
 fn fnz_to_normalized_scientific_ascii(
     out: &mut [u8],
     sign: bool,
@@ -1265,11 +1271,9 @@ fn fnz_to_normalized_scientific_ascii(
     total_len
 }
 
-/*
- * Finite non-zero: pick the form. Integer when the quantum exponent is zero,
- * fixed-point when it is negative and the adjusted exponent is at least -6,
- * scientific otherwise -- the GDAS auto-select rule.
- */
+/// Finite non-zero: pick the form. Integer when the quantum exponent is zero, fixed-point when
+/// it is negative and the adjusted exponent is at least -6, scientific otherwise -- the GDAS
+/// auto-select rule.
 fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usize {
     let digit_len = calc_digit_len_128(dw1, dw0);
     let e_exp = q_exp + (digit_len as i32 - 1);
@@ -1286,7 +1290,9 @@ fn fnz_ascii(out: &mut [u8], sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> usiz
  * bits -> text
  * ---------------------------------------------------------------------- */
 
-/// Unpack a BID128 encoding, per IEEE 754-2019 3.5.2, and render it.
+/// Render a BID128 encoding into the caller's buffer. Field extraction follows IEEE 754-2019
+/// section 3.5.2; the class it lands on -- Infinity, NaN (quiet or signaling, with optional
+/// payload), zero (canonical or non-canonical), or finite non-zero -- picks the leaf renderer.
 fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usize {
     // The API's contract is a buffer of at least MAX_LEN, so that is what is
     // checked -- once, on every call, rather than per rendered form. The
@@ -1344,7 +1350,9 @@ fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usi
     fnz_ascii(out, sign, q_exp, dw1, dw0)
 }
 
-/// Unpack a DPD128 encoding and hand the pieces to the same renderers.
+/// Render a DPD128 encoding into the caller's buffer. The peer of `decode_bid128_to_ascii`:
+/// both reduce an encoding to (sign, qExp, coefficient) and then dispatch to the same leaf
+/// renderers, which have never seen an interchange format.
 fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usize {
     // The API's contract is a buffer of at least MAX_LEN, so that is what is
     // checked -- once, on every call, rather than per rendered form. The
@@ -1423,6 +1431,10 @@ fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usi
  * region -- is format-neutral; the two formats diverge only here.
  * ------------------------------------------------------------------------ */
 
+/// Pack the sign, biased quantum exponent, and 113-bit coefficient into the BID128 encoding.
+/// Always uses the short-form encoding (combination field top bits not 11), which is correct
+/// for any canonical coefficient whose top 3 bits fit in 0..7. Preconditions: the exponent must
+/// be in [-6176, 6111] and the coefficient must have at most 34 decimal digits.
 fn bid128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
     verify!(
         (Q_MIN..=Q_MAX).contains(&q_exp),
@@ -1438,20 +1450,17 @@ fn bid128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
     (s | g | dw1, dw0)
 }
 
-/*
- * Pack a finite value into DPD128: the same sign and the same 14-bit biased
- * exponent as BID, and a coefficient of the same 34 digits laid out as a
- * leading digit in the combination field plus eleven declets.
- *
- * The leading digit cannot be packed independently of the exponent -- DPD puts
- * it in the same five-bit prefix as the exponent's top two bits -- so unlike BID
- * there is no shared sign-and-exponent step to factor out.
- */
-// `t_hi` below is read only by a `verify!`, so with the feature off it is an
-// unused binding. Scoped here rather than crate-wide, and the function is short
-// enough that nothing else can hide behind it.
+/// Pack a finite value into DPD128. The peer of `bid128_set_finite`: same inputs, same sign
+/// bit, same 14-bit biased exponent, and a coefficient of the same 34 digits -- laid out as a
+/// leading digit carried in the combination field plus eleven declets. The leading digit cannot
+/// be packed independently of the exponent: DPD puts it in the same five-bit prefix as the
+/// exponent's top two bits, so unlike BID there is no shared "pack sign and exponent" step to
+/// factor out.
 #[cfg_attr(not(feature = "verify"), allow(unused_variables))]
 fn dpd128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
+    // t_hi below is read only by a verify!, so with the feature off it is an unused binding.
+    // Scoped here rather than crate-wide, and the function is short enough that nothing else
+    // can hide behind it.
     verify!(
         (Q_MIN..=Q_MAX).contains(&q_exp),
         "the quantum exponent is in range"
@@ -1493,6 +1502,10 @@ fn dpd128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
     )
 }
 
+/// Pack a finite value into whichever interchange format the caller asked for. BID and DPD are
+/// peers: both carry the same sign, the same 14-bit biased exponent and the same 34-digit
+/// coefficient, and differ only in how that coefficient is laid out. Everything upstream of
+/// this point -- rounding, clamping and the underflow region -- is format-neutral.
 fn set_finite(format_is_bid: bool, sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
     if format_is_bid {
         bid128_set_finite(sign, q_exp, dw1, dw0)
@@ -1518,12 +1531,9 @@ fn bid128_set_nan(
     (without_payload | payload_dw1, payload_dw0)
 }
 
-/*
- * Pack a NaN into DPD128. The payload occupies the whole 110-bit trailing field
- * as eleven declets -- 33 digits, with no leading digit in the combination
- * field, since G0..G4 are fixed at 11111 and G5 carries the signaling flag.
- */
-// Same verify!-only binding as dpd128_set_finite; see the note there.
+/// Pack a NaN into DPD128. The payload occupies the whole 110-bit trailing field as eleven
+/// declets -- 33 digits, with no leading digit in the combination field, since G0..G4 are fixed
+/// at 11111 and G5 carries the signaling flag.
 #[cfg_attr(not(feature = "verify"), allow(unused_variables))]
 fn dpd128_set_nan(
     sign: bool,
@@ -1531,6 +1541,7 @@ fn dpd128_set_nan(
     payload_dw1: u64,
     payload_dw0: u64,
 ) -> (u64, u64) {
+    // Same verify!-only binding as dpd128_set_finite; see the note there.
     verify!(
         calc_digit_len_128(payload_dw1, payload_dw0) <= 33,
         "the payload is at most 33 digits"
@@ -1554,6 +1565,10 @@ fn dpd128_set_nan(
     )
 }
 
+/// Pack a NaN into whichever interchange format the caller asked for. A NaN payload is a
+/// coefficient, so the formats diverge here exactly as they do for finite values: BID keeps it
+/// as a binary integer, DPD as declets. Infinity by contrast has no coefficient, which is why
+/// it is byte-identical in both and needs no such split.
 fn set_nan(
     format_is_bid: bool,
     sign: bool,
@@ -1572,12 +1587,16 @@ fn set_nan(
  * Finalize: rounding, clamping, underflow
  * ---------------------------------------------------------------------- */
 
+/// Encode Infinity (or -Infinity).
 fn finalize_overflow(sign: bool) -> (u64, u64) {
     let s = if sign { SIGN_BIT } else { 0 };
     (s | INF_PATTERN_HI, 0)
 }
 
-/// Does this coefficient/exponent pair fit as a canonical encoding?
+/// Test whether a coefficient/exponent pair fits as a canonical encoding: exponent in [-6176,
+/// 6111] and coefficient in [0, 10^34). Fast path uses the leading-zero bit count of the high
+/// word to cheaply confirm the coefficient has at most 113 bits, in which case it is
+/// necessarily less than 10^34 (since 2^113 > 10^34). Slow path compares against 10^34.
 fn coeff_q_exp_fit(dw1: u64, dw0: u64, q_exp: i32) -> bool {
     if !(Q_MIN..=Q_MAX).contains(&q_exp) {
         return false;
@@ -1589,11 +1608,12 @@ fn coeff_q_exp_fit(dw1: u64, dw0: u64, q_exp: i32) -> bool {
     dw1 < MAXX_COEFF_34_HI || (dw1 == MAXX_COEFF_34_HI && dw0 < MAXX_COEFF_34_LO)
 }
 
-/*
- * A finite value whose quantum exponent exceeds Q_MAX but whose coefficient has
- * leading capacity: absorb the excess into the coefficient, bringing the
- * exponent down to exactly Q_MAX without changing the value.
- */
+/// Encode a finite value whose natural quantum exponent exceeds qMax (6111) but whose
+/// coefficient has enough leading capacity to absorb the excess. Multiplies the coefficient by
+/// 10^qExcess (where qExcess is qExp minus 6111), reducing the exponent to exactly 6111. This
+/// preserves the value while bringing the encoding into representable range. Caller must have
+/// verified that the coefficient has enough room (digitLen + qExcess <= 34); this function
+/// asserts the invariant and produces the clamped encoding.
 fn finalize_clamping(
     format_is_bid: bool,
     sign: bool,
@@ -1626,12 +1646,12 @@ fn finalize_clamping(
     set_finite(format_is_bid, sign, Q_MAX, dw1_scaled, dw0_scaled)
 }
 
-/*
- * The underflow boundary: the coefficient's most significant digit sits exactly
- * one position right of the representable range, so the coefficient itself
- * decides the rounding. Under ties-to-even the outcome is zero unless the total
- * residue is greater than half, zero being even.
- */
+/// Handle the underflow boundary case where the most-significant digit of the coefficient sits
+/// exactly one position to the right of the representable range. The coefficient value itself
+/// determines rounding: comparing the coefficient against (10^digitLen) / 2 yields the residue
+/// class. Combined with any incoming residue, this drives a roundTiesToEven decision between
+/// zero (always even, the default outcome) and 1 ulp (the smallest subnormal, only when total
+/// residue is `GT_HALF`).
 fn finalize_underflow_boundary(
     format_is_bid: bool,
     sign: bool,
@@ -1647,8 +1667,8 @@ fn finalize_underflow_boundary(
     set_finite(format_is_bid, sign, Q_MIN, 0, coeff)
 }
 
-/// Representable as a subnormal: truncate to the minimum exponent, keeping what
-/// precision survives, and round what is left.
+/// Representable as a subnormal: truncate to the minimum exponent, keeping what precision
+/// survives, and round what is left.
 fn finalize_subnormal(
     format_is_bid: bool,
     sign: bool,
@@ -1685,8 +1705,14 @@ fn finalize_subnormal(
     set_finite(format_is_bid, sign, q_exp_t, dw1_t, dw0_t)
 }
 
-/// Dispatch the three underflow cases: swamped to zero, the exact boundary, and
-/// the subnormal region.
+/// Dispatch underflow handling for a value whose exponent is below Emin (-6176). Three cases:
+///
+/// - Truncation needed exceeds the digit count: result is zero (the value is below half the
+///   smallest subnormal).
+/// - Truncation equals the digit count: boundary case where the leading digit of the
+///   coefficient determines rounding.
+/// - Truncation is less than the digit count: representable as a subnormal; some precision is
+///   preserved, with rounding.
 fn finalize_underflow_region(
     format_is_bid: bool,
     sign: bool,
@@ -1710,18 +1736,32 @@ fn finalize_underflow_region(
     }
 }
 
-/*
- * Round a parsed coefficient/exponent pair to a canonical encoding, under
- * ties-to-even, and pack it.
- *
- *  1. fast path -- already in range and no rounding to do
- *  2. a zero coefficient with an out-of-range exponent clamps
- *  3. (special values never arrive here)
- *  4. underflow, when the exponent is below the minimum
- *  5. truncate to 34 digits -- REMOVED as unreachable, see the note in the body
- *  6. round, and renormalize if the coefficient rolls over to 10^34
- *  7. overflow to Infinity, or clamp near Emax
- */
+/// Round and finalize a finite parsed coefficient/exponent pair into its encoding. Implements
+/// roundTiesToEven rounding with full handling of the decimal128 boundary conditions: oversized
+/// coefficient, underflow to subnormal or zero, overflow to infinity, and the clamped-near-Emax
+/// region where a finite value with too-large quantum exponent can be representable by
+/// absorbing the excess into the coefficient.
+///
+/// Step 1 (fast path): if the input already fits within precision and range and no rounding is
+/// required (residue <= `LT_HALF`, or `HALF` with an even retained low bit), encode and return
+/// immediately. This picks up the vast majority of cases.
+///
+/// Step 2 (zero coefficient): zeros that are out of qExp range get clamped to the valid range.
+///
+/// Step 3 (special values): not applicable here -- special values are handled by callers before
+/// reaching this function.
+///
+/// Step 4 (underflow): if the exponent is below Emin, divert to `finalize_underflow_region` for
+/// subnormal handling.
+///
+/// Step 5 (precision truncation): REMOVED as unreachable from a codec's callers -- see the note
+/// in the body, which also states what would have to change for it to be needed again.
+///
+/// Step 6 (rounding): apply roundTiesToEven. If rounding causes the coefficient to roll over to
+/// 10^34, normalize to 10^33 and increment the exponent.
+///
+/// Step 7 (overflow / clamping): if the exponent exceeds Emax, either absorb the excess into
+/// the coefficient (clamping near Emax) or overflow to infinity.
 fn round_and_finalize_finite(
     format_is_bid: bool,
     sign: bool,
@@ -1832,20 +1872,15 @@ fn round_and_finalize_finite(
  * text -> bits
  * ---------------------------------------------------------------------- */
 
-/*
- * The code of the byte at `index`, or -1 past the end of the slice.
- *
- * The parsers walk the input as byte codes, so end-of-input is one more code
- * value rather than a bound test at every read. -1 is not a byte, so a NUL in
- * the string stays an ordinary -- and invalid -- input byte rather than
- * doubling as the terminator: a `&str` carries its own length and can hold one,
- * and it is rejected. Parsing walks the UTF-8 bytes rather than the `char`s, on
- * a borrowed slice, so nothing is copied.
- *
- * Rust has no increment operator, so the advance is its own line at each call
- * rather than riding in the index.
- */
+/// The code of the character at `index`, or -1 past the end of the input. The parsers walk the
+/// input as character codes, so end-of-input is one more code value rather than a bound test at
+/// every read.
 fn code_at(str: &[u8], index: usize) -> i32 {
+    // -1 is not a byte, so a NUL in the string stays an ordinary -- and invalid -- input byte
+    // rather than doubling as the terminator: a &str carries its own length and can hold one,
+    // and it is rejected. Parsing walks the UTF-8 bytes rather than the chars, on a borrowed
+    // slice, so nothing is copied. Rust has no increment operator, so the advance is its own
+    // line at each call rather than riding in the index.
     if index < str.len() {
         i32::from(str[index])
     } else {
@@ -1853,27 +1888,21 @@ fn code_at(str: &[u8], index: usize) -> i32 {
     }
 }
 
-/*
- * `u8::is_ascii_digit` has no counterpart on the `i32` the reader yields, so
- * the digit test is spelled out here once.
- */
+/// The digit test, spelled out once: `true` for '0' through '9' and nothing else.
 fn is_digit(ch: i32) -> bool {
+    // u8::is_ascii_digit has no counterpart on the i32 the reader yields.
     ch >= i32::from(b'0') && ch <= i32::from(b'9')
 }
 
-/*
- * Parse a finite numeral: optional radix point, optional E exponent, any number
- * of digits.
- *
- * Coefficients with more than 34 significant digits are accepted; leading zeros
- * are flushed, and the digits past 34 are tracked as residue for the
- * ties-to-even rounding that follows. Exponent magnitudes clamp to 9999, which
- * is enough for finalize to detect overflow or underflow.
- *
- * Leading zeros can be flushed branchlessly by coercing a comparison to an
- * integer; the two counters below say the same thing with an `if`, since
- * `usize::from(bool)` in an accumulator reads worse than the branch.
- */
+/// Parse a finite decimal numeral and produce the corresponding encoding. Accepts an optional
+/// decimal point, an optional E/e exponent (with optional +/- sign), and any number of
+/// significant digits. Coefficients with more than 34 significant digits are accepted; leading
+/// zeros before a non-zero digit are flushed; the digits past 34 are properly tracked as
+/// residue for subsequent roundTiesToEven rounding. Excess exponent magnitudes are clamped to
+/// 9999, which is sufficient for the rounding logic to detect overflow or underflow.
+///
+/// Sign is taken from the `sign` parameter (already consumed by the dispatcher); the leading
+/// character `ch_first` is the first digit or `.` and is processed by the main loop.
 fn parse_finite_value_text(
     format_is_bid: bool,
     sign: bool,
@@ -1881,6 +1910,9 @@ fn parse_finite_value_text(
     bytes: &[u8],
     start_pos: usize,
 ) -> Result<(u64, u64), &'static str> {
+    // Leading zeros can be flushed branchlessly by coercing a comparison to an integer; the two
+    // counters below say the same thing with an if, since usize::from(bool) in an accumulator
+    // reads worse than the branch.
     let mut pos = start_pos;
     let mut residue = EXACT;
 
@@ -2026,7 +2058,8 @@ fn parse_finite_value_text(
     ))
 }
 
-/// Parse Infinity, or its three-letter abbreviation Inf, case-insensitively.
+/// Parse the keyword Infinity (or its 3-letter abbreviation Inf), case-insensitively, and
+/// produce the corresponding encoding. Any other input is rejected.
 fn parse_infinity_text(
     sign: bool,
     ch_first: i32,
@@ -2058,23 +2091,22 @@ fn parse_infinity_text(
     Ok((INF_PATTERN_HI | s, 0))
 }
 
-/*
- * Parse NaN, qNaN or sNaN, case-insensitively, with an optional payload of
- * decimal digits. A payload of 34 or more digits AS WRITTEN is non-canonical and
- * reads as zero, per IEEE 754-2019 3.5.2.
- *
- * The payload may be written bare (NaN123) or enclosed in parentheses
- * (NaN(123)). The parenthesised form is positional and balanced: the '(' must
- * follow the word immediately, at least one digit must appear, and the ')' must
- * be the last character of the input. So NaN(1)2(3), NaN(1, NaN(1] and NaN() are
- * all rejected, and NaN[1] and NaN{1} are not this form at all.
- *
- * This spelling exists because the platform's own strtod reads
- * NAN(n-char-sequence), so it reaches a caller from the platform itself.
- * The resemblance stops at the parentheses: strtod's sequence is
- * letters, digits and underscores read as an implementation-defined integer,
- * while a decimal128 payload is decimal digits.
- */
+/// Parse NaN, qNaN, or sNaN (case-insensitive) with an optional decimal payload, and produce
+/// the corresponding encoding. Payloads of 34+ digits AS WRITTEN are non-canonical and produce
+/// a zero payload per IEEE 754-2019 section 3.5.2.
+///
+/// The payload may be written bare (`NaN123`) or enclosed in parentheses (`NaN(123)`). The
+/// parenthesised form is positional and balanced: the `(` must follow the word immediately, at
+/// least one digit must appear, and the `)` must be the last character of the input. So
+/// `NaN(1)2(3)`, `NaN(1`, `NaN(1]` and `NaN()` are all rejected, and `NaN[1]` / `NaN{1}` are
+/// not this form at all.
+///
+/// The reason this spelling exists at all is that the platform's own `strtod` reads
+/// `NAN(n-char-sequence)`, so the spelling reaches a caller from the platform itself. The
+/// resemblance stops at the parentheses -- `strtod`'s sequence is letters, digits and
+/// underscores read as an implementation-defined integer (`NAN(abc)` and `NAN(0x1c8)` are legal
+/// there), while a decimal128 payload is decimal digits. This is a paren-tolerant spelling of
+/// our own payload syntax, not `strtod`'s.
 fn parse_nan_text(
     format_is_bid: bool,
     sign: bool,
@@ -2165,7 +2197,10 @@ fn parse_nan_text(
     ))
 }
 
-/// Read the optional sign, then dispatch on the leading character.
+/// Top-level dispatcher for parsing a decimal character sequence into an encoding. Reads
+/// optional sign, then dispatches by leading character to the finite-value, infinity, or NaN
+/// parser. The leading character is also passed through to the dispatched parser so it doesn't
+/// have to re-read what the dispatcher already consumed.
 fn encode_string_or_error(format_is_bid: bool, bytes: &[u8]) -> Result<(u64, u64), &'static str> {
     let mut pos = 0;
     let ch_first = code_at(bytes, pos);
