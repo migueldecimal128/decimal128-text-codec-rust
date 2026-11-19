@@ -375,10 +375,10 @@ pub fn dpd128_parse(out: &mut u128, text: &str) -> Option<&'static str> {
 /// `String::from_utf8` stood when the renderers returned an owned string, and
 /// keeps the crate free of `unsafe`.
 fn as_str(bytes: &[u8]) -> &str {
-    match core::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => impossible("the renderer wrote a non-ASCII byte"),
+    if let Ok(s) = core::str::from_utf8(bytes) {
+        return s;
     }
+    impossible("the renderer wrote a non-ASCII byte")
 }
 
 /*
@@ -388,16 +388,13 @@ fn as_str(bytes: &[u8]) -> &str {
  * who discards the message still holds a legal IEEE 754-2019 datum.
  */
 fn parse_into(format_is_bid: bool, out: &mut u128, text: &str) -> Option<&'static str> {
-    match encode_string_or_error(format_is_bid, text.as_bytes()) {
-        Ok((hi, lo)) => {
-            *out = join_words(hi, lo);
-            None
-        }
-        Err(message) => {
-            *out = QNAN;
-            Some(message)
-        }
+    let result = encode_string_or_error(format_is_bid, text.as_bytes());
+    if let Ok((hi, lo)) = result {
+        *out = join_words(hi, lo);
+        return None;
     }
+    *out = QNAN;
+    result.err()
 }
 
 /* ------------------------------------------------------------------------
@@ -771,7 +768,7 @@ fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, 
     let mut dw1_t = dw1;
     let mut dw0_t = dw0;
     let mut digits_remaining = truncation_needed;
-    loop {
+    while digits_remaining > 0 {
         let step_pow10 = if digits_remaining < 9 {
             digits_remaining
         } else {
@@ -782,9 +779,6 @@ fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, 
         let step_residue = residue_from_value_pow10(0, rem, step_pow10);
         scale_residue = residue_merge(step_residue, scale_residue);
         digits_remaining -= step_pow10;
-        if digits_remaining == 0 {
-            break;
-        }
     }
     (dw1_t, dw0_t, scale_residue)
 }
@@ -1080,28 +1074,23 @@ fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8],
 /// `core` has no integer-to-bytes helper, and routing this through `fmt` would
 /// pull the formatting machinery into the render path for one call site.
 fn append_int(out: &mut [u8], v: i32) -> usize {
-    let mut tmp = [0u8; 12];
-    let mut n = 0;
-    let mut len = 0;
-    let mut magnitude = v.unsigned_abs();
+    let mut sign_len = 0;
+    let magnitude = v.unsigned_abs();
     if v < 0 {
-        out[len] = b'-';
-        len += 1;
+        out[0] = b'-';
+        sign_len = 1;
     }
-    loop {
-        tmp[n] = b'0' + (magnitude % 10) as u8;
-        n += 1;
-        magnitude /= 10;
-        if magnitude == 0 {
-            break;
-        }
-    }
-    while n > 0 {
-        n -= 1;
-        out[len] = tmp[n];
-        len += 1;
-    }
-    len
+    let digit_len = if magnitude >= 1000 {
+        4
+    } else if magnitude >= 100 {
+        3
+    } else if magnitude >= 10 {
+        2
+    } else {
+        1
+    };
+    render_tail_digits_before_index(digit_len, magnitude as u64, out, sign_len + digit_len);
+    sign_len + digit_len
 }
 
 /* --------------------------------------------------------------------------
@@ -1211,13 +1200,17 @@ fn fnz_to_decimal_point_ascii(
     let decimal_point_len = 1;
     let total_len = sign_len + leading_zero_count + decimal_point_len + digit_len;
     out[0] = b'-';
-    for byte in out.iter_mut().take(leading_zero_count + 1).skip(sign_len) {
+    let mut i = sign_len;
+    while i <= leading_zero_count {
         // one extra, overwritten below
-        *byte = b'0';
+        out[i] = b'0';
+        i += 1;
     }
     u128_to_ascii(digit_len, dw1, dw0, out, sign_len + leading_zero_count);
-    for i in (total_len - digits_right_of_decimal..total_len).rev() {
-        out[i] = out[i - 1];
+    let mut j = total_len - 1;
+    while j >= total_len - digits_right_of_decimal {
+        out[j] = out[j - 1];
+        j -= 1;
     }
     out[total_len - digits_right_of_decimal - 1] = b'.';
     total_len
@@ -2041,10 +2034,10 @@ fn parse_infinity_text(
     let mut ch = ch_first;
     let mut ch_prev_code = 0i32;
     const TARGET: &[u8; 8] = b"infinity";
-    // Nothing below reads the position, so it is taken from the iteration
-    // rather than run as a local -- a counter that outlives nothing is what
-    // `explicit_counter_loop` is there to catch.
-    for (i, &target_code) in TARGET.iter().enumerate() {
+    let mut pos = start_pos;
+    let mut i = 0;
+    while i < 8 {
+        let target_code = TARGET[i];
         if (ch | 0x20) != i32::from(target_code) {
             if ch == -1 {
                 break;
@@ -2052,7 +2045,9 @@ fn parse_infinity_text(
             return Err(ERR_PARSING_INFINITY);
         }
         ch_prev_code = ch | 0x20;
-        ch = code_at(bytes, start_pos + i);
+        ch = code_at(bytes, pos);
+        pos += 1;
+        i += 1;
     }
     if ch != -1 || (ch_prev_code != i32::from(b'f') && ch_prev_code != i32::from(b'y')) {
         return Err(ERR_PARSING_INFINITY);
