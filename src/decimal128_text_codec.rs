@@ -174,32 +174,29 @@ const QNAN_PATTERN_HI: u64 = 0x7C00_0000_0000_0000;
 
 /// Render a BID128 encoding into a caller-supplied buffer, allocating nothing.
 ///
-/// Writes the text into `out` and returns the part written. The returned
-/// `&str` borrows `out`, so nothing is allocated and nothing is copied — it is
-/// a view of the bytes just written, and `out` must outlive it. `MAX_LEN` is
-/// part of the buffer's type, so an undersized buffer is a compile error
-/// rather than a runtime check.
+/// The output is the GDAS `to-scientific-string` form: integer notation when the quantum
+/// exponent is zero (e.g. `"123"`), plain notation when the quantum exponent is negative and
+/// the adjusted exponent is at least -6 (e.g. `"123.45"`), normalized scientific notation
+/// otherwise (e.g. `"1.234E+5"`). The exponent sign is always written, as in `"6.02E+23"`.
+/// Cohort information is preserved: `"1.00"` and `"1.0"` are distinct outputs from distinct
+/// encodings of the same numerical value.
 ///
-/// The output is the GDAS `to-scientific-string` form: integer notation when
-/// the quantum exponent is zero (e.g. `"123"`), plain notation when the
-/// quantum exponent is negative and the adjusted exponent is at least -6
-/// (e.g. `"123.45"`), normalized scientific notation otherwise (e.g.
-/// `"1.234E+5"`). The exponent sign is always written, as in `"6.02E+23"`.
-/// Cohort information is preserved: `"1.00"` and `"1.0"` are distinct
-/// outputs from distinct encodings of the same numerical value.
+/// Special values render as `"Infinity"`, `"-Infinity"`, `"NaN"` and `"sNaN"`, each with an
+/// optional sign and an optional payload suffix such as `"NaN123"`.
 ///
-/// Special values render as `"Infinity"`, `"-Infinity"`, `"NaN"` and `"sNaN"`,
-/// each with an optional sign and an optional payload suffix such as
-/// `"NaN123"`.
+/// The two interchange encodings differ only in how the coefficient is stored: BID128 as a
+/// binary integer, DPD128 as a leading digit plus eleven 10-bit declets. The sign and the
+/// 14-bit biased exponent are the same in both, and peer encodings of the same value render to
+/// identical text.
 ///
-/// The two interchange encodings differ only in how the coefficient is stored:
-/// BID128 as a binary integer, DPD128 as a leading digit plus eleven 10-bit
-/// declets. The sign and the 14-bit biased exponent are the same in both, and
-/// peer encodings of the same value render to identical text.
+/// This cannot fail. Every 128-bit pattern renders: a non-canonical BID128 coefficient (>=
+/// 10^34) renders as zero at the encoded exponent, and a NaN payload >= 10^33 renders as no
+/// payload, both per IEEE 754-2019 section 3.5.2.
 ///
-/// This cannot fail. Every 128-bit pattern renders: a non-canonical BID128
-/// coefficient (≥ 10^34) renders as zero at the encoded exponent, and a NaN
-/// payload ≥ 10^33 renders as no payload, both per IEEE 754-2019 §3.5.2.
+/// In Rust: writes the text into `out` and returns the part written. The returned `&str`
+/// borrows `out`, so nothing is allocated and nothing is copied -- it is a view of the bytes
+/// just written, and `out` must outlive it. `MAX_LEN` is part of the buffer's type, so an
+/// undersized buffer is a compile error rather than a runtime check.
 ///
 /// ```
 /// # use decimal128_text_codec::{MAX_LEN, bid128_to_ascii};
@@ -215,34 +212,30 @@ pub fn bid128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 
 /// Render a DPD128 encoding into a caller-supplied buffer, allocating nothing.
 ///
-/// Writes the text into `out` and returns the part written. The returned
-/// `&str` borrows `out`, so nothing is allocated and nothing is copied — it is
-/// a view of the bytes just written, and `out` must outlive it. `MAX_LEN` is
-/// part of the buffer's type, so an undersized buffer is a compile error
-/// rather than a runtime check.
+/// The output is the GDAS `to-scientific-string` form: integer notation when the quantum
+/// exponent is zero (e.g. `"123"`), plain notation when the quantum exponent is negative and
+/// the adjusted exponent is at least -6 (e.g. `"123.45"`), normalized scientific notation
+/// otherwise (e.g. `"1.234E+5"`). The exponent sign is always written, as in `"6.02E+23"`.
+/// Cohort information is preserved: `"1.00"` and `"1.0"` are distinct outputs from distinct
+/// encodings of the same numerical value.
 ///
-/// The output is the GDAS `to-scientific-string` form: integer notation when
-/// the quantum exponent is zero (e.g. `"123"`), plain notation when the
-/// quantum exponent is negative and the adjusted exponent is at least -6
-/// (e.g. `"123.45"`), normalized scientific notation otherwise (e.g.
-/// `"1.234E+5"`). The exponent sign is always written, as in `"6.02E+23"`.
-/// Cohort information is preserved: `"1.00"` and `"1.0"` are distinct
-/// outputs from distinct encodings of the same numerical value.
+/// Special values render as `"Infinity"`, `"-Infinity"`, `"NaN"` and `"sNaN"`, each with an
+/// optional sign and an optional payload suffix such as `"NaN123"`.
 ///
-/// Special values render as `"Infinity"`, `"-Infinity"`, `"NaN"` and `"sNaN"`,
-/// each with an optional sign and an optional payload suffix such as
-/// `"NaN123"`.
+/// The two interchange encodings differ only in how the coefficient is stored: BID128 as a
+/// binary integer, DPD128 as a leading digit plus eleven 10-bit declets. The sign and the
+/// 14-bit biased exponent are the same in both, and peer encodings of the same value render to
+/// identical text.
 ///
-/// The two interchange encodings differ only in how the coefficient is stored:
-/// BID128 as a binary integer, DPD128 as a leading digit plus eleven 10-bit
-/// declets. The sign and the 14-bit biased exponent are the same in both, and
-/// peer encodings of the same value render to identical text.
+/// This cannot fail. Every 128-bit pattern renders: a DPD128 coefficient is always in range,
+/// since a leading digit of at most 9 followed by eleven declets cannot reach 10^34; a NaN
+/// payload, carried in those same declets, is likewise always in range; and non-canonical
+/// declets decode to their value, per IEEE 754-2019 section 3.5.2.
 ///
-/// This cannot fail. Every 128-bit pattern renders: a DPD128 coefficient is
-/// always in range, since a leading digit of at most 9 followed by eleven
-/// declets cannot reach 10^34; a NaN payload, carried in those same declets,
-/// is likewise always in range; and non-canonical declets decode to their
-/// value, per IEEE 754-2019 §3.5.2.
+/// In Rust: writes the text into `out` and returns the part written. The returned `&str`
+/// borrows `out`, so nothing is allocated and nothing is copied -- it is a view of the bytes
+/// just written, and `out` must outlive it. `MAX_LEN` is part of the buffer's type, so an
+/// undersized buffer is a compile error rather than a runtime check.
 ///
 /// ```
 /// # use decimal128_text_codec::{MAX_LEN, dpd128_to_ascii};
@@ -258,47 +251,44 @@ pub fn dpd128_to_ascii(out: &mut [u8; MAX_LEN], bits: u128) -> &str {
 
 /// Parse a decimal character sequence into a BID128 encoding.
 ///
-/// Returns `None` on success, with the encoding written to `out`. On failure
-/// returns a human-readable message and writes the canonical positive quiet
-/// NaN, so a caller who ignores the return value still holds a legal
-/// IEEE 754-2019 datum rather than a stale one. The message is the engine's
-/// ParseStatus name for the failure -- EMPTY_STRING, INVALID_FORMAT,
-/// UNEXPECTED_CHAR, DOUBLE_DOT, NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT,
-/// INVALID_UNDERSCORE_LOCATION, FAILURE_PARSING_INFINITY or
-/// FAILURE_PARSING_NAN -- asserted against the shared corpus by the
-/// conformance suite, so it is part of the contract.
+/// On failure the encoding written is the canonical positive quiet NaN, so a caller who
+/// discards the message still observes a legal IEEE 754-2019 datum rather than stale or partial
+/// data. The message is the engine's ParseStatus name for the failure -- EMPTY_STRING,
+/// INVALID_FORMAT, UNEXPECTED_CHAR, DOUBLE_DOT, NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT,
+/// INVALID_UNDERSCORE_LOCATION, FAILURE_PARSING_INFINITY or FAILURE_PARSING_NAN -- and the
+/// conformance suite asserts it against the shared corpus, so it is part of the contract.
 ///
 /// Accepted input:
 ///
 /// - Plain notation: `"0"`, `"-1.5"`, `"123.456"`, `"0.0001"`.
-/// - Scientific notation: `"1.5E10"`, `"-2.3e-7"`, `"6.02E+23"`. Both `E` and
-///   `e` are accepted as the exponent separator.
-/// - Digit separators: `_` between two digits, in the coefficient or the
-///   exponent (`"1_000"`, `"1.234_567"`, `"1e1_0"`). An underscore must be
-///   both preceded and followed by a digit, so `"1_"`, `"_1"`, `"1__2"`,
-///   `"1_.5"` and `"1._5"` are all rejected.
-/// - The case-insensitive words `Infinity`, `Inf`, `NaN`, `qNaN` and `sNaN`,
-///   each with an optional sign and an optional NaN payload of decimal digits
-///   (`"NaN123"`, `"-sNaN42"`). A payload may also be parenthesised, as
-///   `"NaN(123)"`.
+/// - Scientific notation: `"1.5E10"`, `"-2.3e-7"`, `"6.02E+23"`. Both `E` and `e` are accepted
+///   as the exponent separator.
+/// - Digit separators: `_` between two digits, in the coefficient or the exponent (`"1_000"`,
+///   `"1.234_567"`, `"1e1_0"`). An underscore must be both preceded and followed by a digit, so
+///   `"1_"`, `"_1"`, `"1__2"`, `"1_.5"` and `"1._5"` are all rejected.
+/// - The case-insensitive words `Infinity`, `Inf`, `NaN`, `qNaN` and `sNaN`, each with an
+///   optional sign and an optional NaN payload of decimal digits (`"NaN123"`, `"-sNaN42"`). A
+///   payload may also be parenthesised, as `"NaN(123)"`.
 ///
-/// The parenthesised payload form is positional and balanced: `(` immediately
-/// after the word, at least one digit, `)` last. `"NaN()"`, `"NaN(1"`,
-/// `"NaN(1)2(3)"`, `"NaN[1]"` and `"NaN{1}"` are rejected. Rendering never
-/// emits parentheses, and the full decimal128 ports accept the same spelling.
+/// The parenthesised payload form is positional and balanced: `(` immediately after the word,
+/// at least one digit, `)` last. `"NaN()"`, `"NaN(1"`, `"NaN(1)2(3)"`, `"NaN[1]"` and
+/// `"NaN{1}"` are rejected. Rendering never emits parentheses, and the full decimal128 ports
+/// accept the same spelling.
 ///
-/// More than 34 significant digits round to 34, ties-to-even. Magnitudes above
-/// the representable range become `Infinity`; magnitudes below it become a
-/// subnormal or zero. None of those are failures.
+/// More than 34 significant digits round to 34, ties-to-even. Magnitudes above the
+/// representable range become `Infinity`; magnitudes below it become a subnormal or zero. None
+/// of those are failures.
 ///
-/// Failures are structural: an empty sequence, unrecognized characters,
-/// missing digits around the radix point, a malformed exponent field.
+/// Failures are structural: an empty sequence, unrecognized characters, missing digits around
+/// the radix point, a malformed exponent field.
 ///
-/// The two interchange encodings differ only in how the coefficient is stored:
-/// BID128 as a binary integer, DPD128 as a leading digit plus eleven 10-bit
-/// declets. The same text parses to peer encodings of the same value in either
-/// format, and the canonical positive quiet NaN is the same bit pattern in
-/// both.
+/// The two interchange encodings differ only in how the coefficient is stored: BID128 as a
+/// binary integer, DPD128 as a leading digit plus eleven 10-bit declets. The same text parses
+/// to peer encodings of the same value in either format, and the canonical positive quiet NaN
+/// is the same bit pattern in both.
+///
+/// In Rust: returns `None` on success, with the encoding written to `out`, and `Some(message)`
+/// on failure; `out` is written either way.
 ///
 /// ```
 /// # use decimal128_text_codec::{MAX_LEN, QNAN, bid128_parse, bid128_to_ascii};
@@ -316,47 +306,44 @@ pub fn bid128_parse(out: &mut u128, str: &str) -> Option<&'static str> {
 
 /// Parse a decimal character sequence into a DPD128 encoding.
 ///
-/// Returns `None` on success, with the encoding written to `out`. On failure
-/// returns a human-readable message and writes the canonical positive quiet
-/// NaN, so a caller who ignores the return value still holds a legal
-/// IEEE 754-2019 datum rather than a stale one. The message is the engine's
-/// ParseStatus name for the failure -- EMPTY_STRING, INVALID_FORMAT,
-/// UNEXPECTED_CHAR, DOUBLE_DOT, NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT,
-/// INVALID_UNDERSCORE_LOCATION, FAILURE_PARSING_INFINITY or
-/// FAILURE_PARSING_NAN -- asserted against the shared corpus by the
-/// conformance suite, so it is part of the contract.
+/// On failure the encoding written is the canonical positive quiet NaN, so a caller who
+/// discards the message still observes a legal IEEE 754-2019 datum rather than stale or partial
+/// data. The message is the engine's ParseStatus name for the failure -- EMPTY_STRING,
+/// INVALID_FORMAT, UNEXPECTED_CHAR, DOUBLE_DOT, NO_COEFFICIENT_DIGIT, NO_EXPONENT_DIGIT,
+/// INVALID_UNDERSCORE_LOCATION, FAILURE_PARSING_INFINITY or FAILURE_PARSING_NAN -- and the
+/// conformance suite asserts it against the shared corpus, so it is part of the contract.
 ///
 /// Accepted input:
 ///
 /// - Plain notation: `"0"`, `"-1.5"`, `"123.456"`, `"0.0001"`.
-/// - Scientific notation: `"1.5E10"`, `"-2.3e-7"`, `"6.02E+23"`. Both `E` and
-///   `e` are accepted as the exponent separator.
-/// - Digit separators: `_` between two digits, in the coefficient or the
-///   exponent (`"1_000"`, `"1.234_567"`, `"1e1_0"`). An underscore must be
-///   both preceded and followed by a digit, so `"1_"`, `"_1"`, `"1__2"`,
-///   `"1_.5"` and `"1._5"` are all rejected.
-/// - The case-insensitive words `Infinity`, `Inf`, `NaN`, `qNaN` and `sNaN`,
-///   each with an optional sign and an optional NaN payload of decimal digits
-///   (`"NaN123"`, `"-sNaN42"`). A payload may also be parenthesised, as
-///   `"NaN(123)"`.
+/// - Scientific notation: `"1.5E10"`, `"-2.3e-7"`, `"6.02E+23"`. Both `E` and `e` are accepted
+///   as the exponent separator.
+/// - Digit separators: `_` between two digits, in the coefficient or the exponent (`"1_000"`,
+///   `"1.234_567"`, `"1e1_0"`). An underscore must be both preceded and followed by a digit, so
+///   `"1_"`, `"_1"`, `"1__2"`, `"1_.5"` and `"1._5"` are all rejected.
+/// - The case-insensitive words `Infinity`, `Inf`, `NaN`, `qNaN` and `sNaN`, each with an
+///   optional sign and an optional NaN payload of decimal digits (`"NaN123"`, `"-sNaN42"`). A
+///   payload may also be parenthesised, as `"NaN(123)"`.
 ///
-/// The parenthesised payload form is positional and balanced: `(` immediately
-/// after the word, at least one digit, `)` last. `"NaN()"`, `"NaN(1"`,
-/// `"NaN(1)2(3)"`, `"NaN[1]"` and `"NaN{1}"` are rejected. Rendering never
-/// emits parentheses, and the full decimal128 ports accept the same spelling.
+/// The parenthesised payload form is positional and balanced: `(` immediately after the word,
+/// at least one digit, `)` last. `"NaN()"`, `"NaN(1"`, `"NaN(1)2(3)"`, `"NaN[1]"` and
+/// `"NaN{1}"` are rejected. Rendering never emits parentheses, and the full decimal128 ports
+/// accept the same spelling.
 ///
-/// More than 34 significant digits round to 34, ties-to-even. Magnitudes above
-/// the representable range become `Infinity`; magnitudes below it become a
-/// subnormal or zero. None of those are failures.
+/// More than 34 significant digits round to 34, ties-to-even. Magnitudes above the
+/// representable range become `Infinity`; magnitudes below it become a subnormal or zero. None
+/// of those are failures.
 ///
-/// Failures are structural: an empty sequence, unrecognized characters,
-/// missing digits around the radix point, a malformed exponent field.
+/// Failures are structural: an empty sequence, unrecognized characters, missing digits around
+/// the radix point, a malformed exponent field.
 ///
-/// The two interchange encodings differ only in how the coefficient is stored:
-/// BID128 as a binary integer, DPD128 as a leading digit plus eleven 10-bit
-/// declets. The same text parses to peer encodings of the same value in either
-/// format, and the canonical positive quiet NaN is the same bit pattern in
-/// both.
+/// The two interchange encodings differ only in how the coefficient is stored: BID128 as a
+/// binary integer, DPD128 as a leading digit plus eleven 10-bit declets. The same text parses
+/// to peer encodings of the same value in either format, and the canonical positive quiet NaN
+/// is the same bit pattern in both.
+///
+/// In Rust: returns `None` on success, with the encoding written to `out`, and `Some(message)`
+/// on failure; `out` is written either way.
 ///
 /// ```
 /// # use decimal128_text_codec::{MAX_LEN, QNAN, dpd128_parse, dpd128_to_ascii};
