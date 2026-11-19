@@ -80,15 +80,14 @@
  * Two mechanisms: one is a debugging aid, the other a claim that must hold
  * in a shipping build.
  *
- *   verify!(condition, message)
+ *   verify!(condition)
  *                       internal-consistency claims -- unreachable for ANY
  *                       input, so a failure is a codec bug rather than bad
  *                       data. Emitted only under the `verify` cargo feature,
  *                       which is OFF by default: a consumer compiles this
  *                       crate into their own program and must not take a panic
  *                       inside a library on data they do not control. With the
- *                       feature off neither the message nor the condition is
- *                       compiled at all. CI runs the whole corpus with it on.
+ *                       feature off the condition is not compiled at all. CI runs the whole corpus with it on.
  *
  *   demand(condition, message)
  *                       claims that must survive into a shipping build: that
@@ -118,11 +117,11 @@ fn demand(condition: bool, message: &str) {
 }
 
 macro_rules! verify {
-    ($condition:expr, $message:expr) => {{
+    ($condition:expr) => {{
         #[cfg(feature = "verify")]
         {
             if !($condition) {
-                $crate::impossible($message);
+                $crate::impossible("verify failed");
             }
         }
     }};
@@ -655,14 +654,8 @@ fn u128_fma_pow10(x: u64, pow10: usize, a: u64) -> (u64, u64) {
 /// are extracted directly as the low part of the remainder, then the shifted value is divided
 /// by `5^pow10` using two hardware 64-bit divides.
 fn u113_div_mod_pow10_max9(dw_hi: u64, dw_lo: u64, pow10: u32) -> (u64, u64, u64) {
-    verify!(
-        (1..=9).contains(&pow10),
-        "pow10 is in the kernel's 1..=9 range"
-    );
-    verify!(
-        dw_hi.leading_zeros() >= 15,
-        "the dividend is at most 113 bits"
-    );
+    verify!((1..=9).contains(&pow10));
+    verify!(dw_hi.leading_zeros() >= 15);
 
     let mask = (1u64 << pow10) - 1;
     let b = dw_lo & mask;
@@ -732,14 +725,8 @@ fn residue_from_value_pow10(dw1: u64, dw0: u64, pow10: usize) -> i32 {
 /// the round-and-sticky residue class of what was discarded. Truncates in chunks of up to 9
 /// digits via `u113_div_mod_pow10_max9`.
 fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, u64, i32) {
-    verify!(
-        (dw1 | dw0) != 0,
-        "the coefficient being scaled down is nonzero"
-    );
-    verify!(
-        truncation_needed > 0 && truncation_needed < calc_digit_len_128(dw1, dw0),
-        "the truncation keeps at least one digit"
-    );
+    verify!((dw1 | dw0) != 0);
+    verify!(truncation_needed > 0 && truncation_needed < calc_digit_len_128(dw1, dw0));
     let mut scale_residue = EXACT;
     let mut dw1_t = dw1;
     let mut dw0_t = dw0;
@@ -772,7 +759,7 @@ fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, 
 fn dpd_decode_declet(declet: u64) -> u64 {
     // A complement of t is spelled & !t here: on operands already reduced to 0 or 1 it agrees
     // with !, and the complemented bits are masked away either way.
-    verify!(declet <= 1023, "the declet is 10 bits");
+    verify!(declet <= 1023);
 
     if declet == 0 {
         return 0;
@@ -822,7 +809,7 @@ fn dpd_decode_declet(declet: u64) -> u64 {
 /// re-encodes to the canonical declet for that value, so `encode(decode(x)) == x` only for
 /// canonical x.
 fn dpd_encode_declet(n: u64) -> u64 {
-    verify!(n <= 999, "the value fits three decimal digits");
+    verify!(n <= 999);
 
     if n == 0 {
         return 0;
@@ -897,7 +884,7 @@ fn bin_from_declets(declets: u64) -> u64 {
 /// Encode a binary integer of at most 18 digits into six packed declets, least significant
 /// first. The inverse of `bin_from_declets` over that range.
 fn declets_from_bin(bin: u64) -> u64 {
-    verify!(bin < TEN_POW_18, "the value fits eighteen decimal digits");
+    verify!(bin < TEN_POW_18);
     let mut rest = bin;
     let mut declets: u64 = 0;
     let mut shift = 0;
@@ -1005,10 +992,7 @@ fn render_tail_digits_before_index(
         t = div_ten;
         remaining_digit_count -= 1;
     }
-    verify!(
-        off_maxx - ib == render_digit_count,
-        "exactly render_digit_count bytes were written"
-    );
+    verify!(off_maxx - ib == render_digit_count);
 }
 
 /// Render a 128-bit unsigned integer as `digit_print_count` decimal digits into `ascii`, ending
@@ -1154,10 +1138,7 @@ fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
 /// Format a finite non-zero value with qExp == 0 as a plain integer sequence: no radix point,
 /// no exponent.
 fn fnz_to_integer_ascii(out: &mut [u8], sign: bool, digit_len: usize, dw1: u64, dw0: u64) -> usize {
-    verify!(
-        digit_len > 0,
-        "a finite nonzero value has at least one digit"
-    );
+    verify!(digit_len > 0);
     let sign_len = usize::from(sign);
     let total_len = sign_len + digit_len;
     out[0] = b'-'; // overwritten by the first digit when unsigned
@@ -1213,10 +1194,7 @@ fn fnz_to_normalized_scientific_ascii(
     dw1: u64,
     dw0: u64,
 ) -> usize {
-    verify!(
-        digit_len > 0,
-        "a finite nonzero value has at least one digit"
-    );
+    verify!(digit_len > 0);
     let e_exp = q_exp + (digit_len as i32 - 1);
     let e_exp_abs = e_exp.unsigned_abs();
     let sign_len = usize::from(sign);
@@ -1278,10 +1256,7 @@ fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usi
     // this boundary.
     demand(out.len() >= MAX_LEN, "the buffer is at least MAX_LEN bytes");
 
-    verify!(
-        1 + W5 + T_WIDTH == 128,
-        "the field widths tile the encoding"
-    );
+    verify!(1 + W5 + T_WIDTH == 128);
 
     let sign = (bid128_hi & SIGN_BIT) != 0;
     let combination = ((bid128_hi >> (T_WIDTH - 64)) & 0x1FFFF) as u32;
@@ -1305,10 +1280,7 @@ fn decode_bid128_to_ascii(out: &mut [u8], bid128_hi: u64, bid128_lo: u64) -> usi
     } else if (combination >> (W5 - 5)) == 0x1E {
         return inf_ascii(out, sign);
     } else {
-        verify!(
-            (combination >> (W5 - 5)) == 0x1F,
-            "the remaining combination field is the NaN pattern"
-        );
+        verify!((combination >> (W5 - 5)) == 0x1F);
         let is_signaling = ((combination >> (W5 - 6)) & 1) != 0;
         return nan_ascii(out, sign, is_signaling, coeff_t_hi, bid128_lo);
     }
@@ -1363,10 +1335,7 @@ fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usi
     } else if (combination >> (W5 - 5)) == 0x1E {
         return inf_ascii(out, sign);
     } else {
-        verify!(
-            (combination >> (W5 - 5)) == 0x1F,
-            "the remaining combination field is the NaN pattern"
-        );
+        verify!((combination >> (W5 - 5)) == 0x1F);
         is_nan = true;
         is_signaling = ((combination >> (W5 - 6)) & 1) != 0;
         d0 = 0;
@@ -1413,14 +1382,8 @@ fn decode_dpd128_to_ascii(out: &mut [u8], dpd128_hi: u64, dpd128_lo: u64) -> usi
 /// for any canonical coefficient whose top 3 bits fit in 0..7. Preconditions: the exponent must
 /// be in [-6176, 6111] and the coefficient must have at most 34 decimal digits.
 fn bid128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
-    verify!(
-        (Q_MIN..=Q_MAX).contains(&q_exp),
-        "the quantum exponent is in range"
-    );
-    verify!(
-        calc_digit_len_128(dw1, dw0) <= 34,
-        "the coefficient is at most 34 digits"
-    );
+    verify!((Q_MIN..=Q_MAX).contains(&q_exp));
+    verify!(calc_digit_len_128(dw1, dw0) <= 34);
     let q_biased = (q_exp + BIAS) as u64;
     let s = if sign { SIGN_BIT } else { 0 };
     let g = q_biased << (3 + 46);
@@ -1438,14 +1401,8 @@ fn dpd128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
     // t_hi below is read only by a verify!, so with the feature off it is an unused binding.
     // Scoped here rather than crate-wide, and the function is short enough that nothing else
     // can hide behind it.
-    verify!(
-        (Q_MIN..=Q_MAX).contains(&q_exp),
-        "the quantum exponent is in range"
-    );
-    verify!(
-        calc_digit_len_128(dw1, dw0) <= 34,
-        "the coefficient is at most 34 digits"
-    );
+    verify!((Q_MIN..=Q_MAX).contains(&q_exp));
+    verify!(calc_digit_len_128(dw1, dw0) <= 34);
 
     // Split the coefficient into its low 18 digits and its high 16. Two
     // divisions by 10^9 rather than one by 10^18, so the existing 128-bit kernel
@@ -1453,14 +1410,14 @@ fn dpd128_set_finite(sign: bool, q_exp: i32, dw1: u64, dw0: u64) -> (u64, u64) {
     let (t_hi, t_lo, r1) = u113_div_mod_pow10_max9(dw1, dw0, 9);
     let (t_hi, t_lo, r2) = u113_div_mod_pow10_max9(t_hi, t_lo, 9);
     let bin_lo = (r2 * 1_000_000_000) + r1;
-    verify!(t_hi == 0, "the high 16 digits fit in one word");
+    verify!(t_hi == 0);
     let bin_hi = t_lo;
 
     // the top digit rides in the combination field; the other 15 are declets
     let d0 = bin_hi / TEN_POW_15;
     let declets5_hi = declets_from_bin(bin_hi - (d0 * TEN_POW_15));
     let declets6_lo = declets_from_bin(bin_lo);
-    verify!(d0 <= 9, "the leading digit is a single digit");
+    verify!(d0 <= 9);
 
     let biased_q_exp = q_exp + BIAS;
     let exp_msb = (biased_q_exp >> 12) & 0x3;
@@ -1516,15 +1473,12 @@ fn dpd128_set_nan(
     payload_dw0: u64,
 ) -> (u64, u64) {
     // Same verify!-only binding as dpd128_set_finite; see the note there.
-    verify!(
-        calc_digit_len_128(payload_dw1, payload_dw0) <= 33,
-        "the payload is at most 33 digits"
-    );
+    verify!(calc_digit_len_128(payload_dw1, payload_dw0) <= 33);
 
     let (t_hi, t_lo, r1) = u113_div_mod_pow10_max9(payload_dw1, payload_dw0, 9);
     let (t_hi, t_lo, r2) = u113_div_mod_pow10_max9(t_hi, t_lo, 9);
     let bin_lo = (r2 * 1_000_000_000) + r1;
-    verify!(t_hi == 0, "a 33-digit payload leaves 15 digits up top");
+    verify!(t_hi == 0);
     let declets5_hi = declets_from_bin(t_lo);
     let declets6_lo = declets_from_bin(bin_lo);
 
@@ -1593,10 +1547,7 @@ fn finalize_clamping(
     dw0: u64,
 ) -> (u64, u64) {
     let q_excess = q_exp - Q_MAX;
-    verify!(
-        q_excess > 0 && q_excess as usize <= 34 - calc_digit_len_128(dw1, dw0),
-        "the excess exponent fits the coefficient's spare digits"
-    );
+    verify!(q_excess > 0 && q_excess as usize <= 34 - calc_digit_len_128(dw1, dw0));
     let pow10_offset = (q_excess as usize) << 1;
     let y1 = POW10[pow10_offset + 1];
     let y0 = POW10[pow10_offset];
@@ -1610,10 +1561,7 @@ fn finalize_clamping(
     let pp01_lo = dw0.wrapping_mul(y1);
     let dw0_scaled = pp00_lo;
     let dw1_scaled = pp00_hi.wrapping_add(pp10_lo).wrapping_add(pp01_lo);
-    verify!(
-        coeff_q_exp_fit(dw1_scaled, dw0_scaled, Q_MAX),
-        "the scaled coefficient is representable at Q_MAX"
-    );
+    verify!(coeff_q_exp_fit(dw1_scaled, dw0_scaled, Q_MAX));
     set_finite(format_is_bid, sign, Q_MAX, dw1_scaled, dw0_scaled)
 }
 
@@ -1631,7 +1579,7 @@ fn finalize_underflow_boundary(
     residue_in: i32,
 ) -> (u64, u64) {
     let digit_len = calc_digit_len_128(dw1, dw0);
-    verify!(digit_len != 0, "the boundary coefficient is nonzero");
+    verify!(digit_len != 0);
     let scale_residue = residue_from_value_pow10(dw1, dw0, digit_len);
     let total_residue = residue_merge(scale_residue, residue_in);
     let coeff = u64::from(total_residue == GT_HALF);
@@ -1649,10 +1597,7 @@ fn finalize_subnormal(
     residue_in: i32,
 ) -> (u64, u64) {
     let truncation_needed = (Q_MIN - q_exp_in) as usize;
-    verify!(
-        truncation_needed > 0 && truncation_needed < calc_digit_len_128(dw1_in, dw0_in),
-        "the subnormal truncation keeps at least one digit"
-    );
+    verify!(truncation_needed > 0 && truncation_needed < calc_digit_len_128(dw1_in, dw0_in));
 
     let (mut dw1_t, mut dw0_t, scale_residue) =
         u128_scale_down_pow10(dw1_in, dw0_in, truncation_needed);
@@ -1693,10 +1638,10 @@ fn finalize_underflow_region(
     residue: i32,
 ) -> (u64, u64) {
     // IEEE 754-2019 7.5 Underflow -- the subnormal region
-    verify!(q_exp < Q_MIN, "the exponent is below the minimum");
+    verify!(q_exp < Q_MIN);
     let truncation_needed = (Q_MIN - q_exp) as usize;
     let digit_len = calc_digit_len_128(dw1, dw0);
-    verify!(digit_len <= 34, "the coefficient is at most 34 digits");
+    verify!(digit_len <= 34);
     if truncation_needed > digit_len {
         // below half the smallest subnormal: zero, and always inexact
         round_and_finalize_finite(format_is_bid, sign, Q_MIN, 0, 0, LT_HALF)
@@ -1823,11 +1768,8 @@ fn round_and_finalize_finite(
     }
 
     // Step 7
-    verify!(q_exp >= Q_MIN, "the exponent is at or above the minimum");
-    verify!(
-        calc_digit_len_128(dw1, dw0) <= 34,
-        "the rounded coefficient is at most 34 digits"
-    );
+    verify!(q_exp >= Q_MIN);
+    verify!(calc_digit_len_128(dw1, dw0) <= 34);
     if q_exp > Q_MAX {
         let q_excess = (q_exp - Q_MAX) as usize;
         let digit_len = calc_digit_len_128(dw1, dw0);
@@ -1896,7 +1838,7 @@ fn parse_finite_value_text(
     let mut prev_was_digit = false;
     let mut after_underscore = false;
 
-    verify!(ch_first != -1, "the first character was already read");
+    verify!(ch_first != -1);
     let mut ch = ch_first;
     let mut fractional_digit_count: usize = 0;
     let mut accum19a: u64 = 0;
