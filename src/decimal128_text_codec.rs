@@ -604,20 +604,14 @@ fn mulhi64(x: u64, y: u64) -> u64 {
     (((x as u128) * (y as u128)) >> 64) as u64
 }
 
-/// Leading zero count, 64 for zero.
-#[inline(always)]
-fn clz64(v: u64) -> u32 {
-    v.leading_zeros()
-}
-
 /// Compute the bit-length of a 128-bit unsigned value: the position of the highest set bit,
 /// plus one. Returns 0 for the zero value.
 fn calc_bit_len_128(dw1: u64, dw0: u64) -> u32 {
     if dw1 != 0 {
-        return 128 - clz64(dw1);
+        return 128 - dw1.leading_zeros();
     }
     if dw0 != 0 {
-        return 64 - clz64(dw0);
+        return 64 - dw0.leading_zeros();
     }
     0
 }
@@ -634,17 +628,9 @@ fn calc_digit_len_128(dw1: u64, dw0: u64) -> usize {
     let p1 = POW10[pow10_offset + 1];
     let p0 = POW10[pow10_offset];
     if dw1 != p1 {
-        return if dw1 < p1 {
-            hi_digit_count - 1
-        } else {
-            hi_digit_count
-        };
+        return hi_digit_count - usize::from(dw1 < p1);
     }
-    if dw0 < p0 {
-        hi_digit_count - 1
-    } else {
-        hi_digit_count
-    }
+    hi_digit_count - usize::from(dw0 < p0)
 }
 
 /// Multiply a 64-bit unsigned value `x` by `10^pow10` and add a 64-bit integer `a`, producing
@@ -673,7 +659,10 @@ fn u113_div_mod_pow10_max9(dw_hi: u64, dw_lo: u64, pow10: u32) -> (u64, u64, u64
         (1..=9).contains(&pow10),
         "pow10 is in the kernel's 1..=9 range"
     );
-    verify!(clz64(dw_hi) >= 15, "the dividend is at most 113 bits");
+    verify!(
+        dw_hi.leading_zeros() >= 15,
+        "the dividend is at most 113 bits"
+    );
 
     let mask = (1u64 << pow10) - 1;
     let b = dw_lo & mask;
@@ -756,11 +745,7 @@ fn u128_scale_down_pow10(dw1: u64, dw0: u64, truncation_needed: usize) -> (u64, 
     let mut dw0_t = dw0;
     let mut digits_remaining = truncation_needed;
     while digits_remaining > 0 {
-        let step_pow10 = if digits_remaining < 9 {
-            digits_remaining
-        } else {
-            9
-        };
+        let step_pow10 = digits_remaining.min(9);
         let rem;
         (dw1_t, dw0_t, rem) = u113_div_mod_pow10_max9(dw1_t, dw0_t, step_pow10 as u32);
         let step_residue = residue_from_value_pow10(0, rem, step_pow10);
@@ -957,6 +942,10 @@ fn render8_digits_before_index(dw: u64, ascii: &mut [u8], off_maxx: usize) {
     let g = (gh * M_U32_DIV_1E1) >> S_U32_DIV_1E1;
     let h = gh - (g * 10);
 
+    demand(
+        off_maxx >= 8 && off_maxx <= ascii.len(),
+        "render8DigitsBeforeIndex: offset out of range",
+    );
     ascii[off_maxx - 8] = b'0' + a as u8;
     ascii[off_maxx - 7] = b'0' + b as u8;
     ascii[off_maxx - 6] = b'0' + c as u8;
@@ -997,6 +986,10 @@ fn render_tail_digits_before_index(
         let b = ab - (a * 10);
         let c = (cd * M_U32_DIV_1E1) >> S_U32_DIV_1E1;
         let d = cd - (c * 10);
+        demand(
+            ib >= 4 && ib <= ascii.len(),
+            "u128ToAscii: offset out of range",
+        );
         ascii[ib - 4] = b'0' + a as u8;
         ascii[ib - 3] = b'0' + b as u8;
         ascii[ib - 2] = b'0' + c as u8;
@@ -1068,10 +1061,11 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
     // core has no integer-to-bytes helper, and routing this through fmt would pull the
     // formatting machinery into the render path for one call site.
     let mut sign_len = 0;
-    let magnitude = v.unsigned_abs();
+    let mut magnitude = v;
     if v < 0 {
         out[0] = b'-';
         sign_len = 1;
+        magnitude = -v;
     }
     let digit_len = if magnitude >= 1000 {
         4
@@ -1184,12 +1178,8 @@ fn fnz_to_decimal_point_ascii(
     dw0: u64,
 ) -> usize {
     let digits_right_of_decimal = (-q_exp) as usize;
-    let leading_zero_signed = 1 + digits_right_of_decimal as i32 - digit_len as i32;
-    let leading_zero_count = if leading_zero_signed < 0 {
-        0
-    } else {
-        leading_zero_signed as usize
-    };
+    let leading_zero_count =
+        (1 + digits_right_of_decimal as i32 - digit_len as i32).max(0) as usize;
     let sign_len = usize::from(sign);
     let decimal_point_len = 1;
     let total_len = sign_len + leading_zero_count + decimal_point_len + digit_len;
@@ -1507,14 +1497,11 @@ fn bid128_set_nan(
     payload_dw1: u64,
     payload_dw0: u64,
 ) -> (u64, u64) {
-    let mut without_payload = if is_signaling {
+    let without_payload = (if is_signaling {
         SNAN_PATTERN_HI
     } else {
         QNAN_PATTERN_HI
-    };
-    if sign {
-        without_payload |= SIGN_BIT;
-    }
+    }) | (if sign { SIGN_BIT } else { 0 });
     (without_payload | payload_dw1, payload_dw0)
 }
 
@@ -1541,10 +1528,7 @@ fn dpd128_set_nan(
     let declets5_hi = declets_from_bin(t_lo);
     let declets6_lo = declets_from_bin(bin_lo);
 
-    let mut g_field = 0x1Fu64 << 12;
-    if is_signaling {
-        g_field |= 1 << 11;
-    }
+    let g_field = (0x1Fu64 << 12) | (if is_signaling { 1 << 11 } else { 0 });
     let sign_combo = (u64::from(sign) << 17) | g_field;
     (
         (sign_combo << 46) | (declets5_hi >> 4),
@@ -1589,7 +1573,7 @@ fn coeff_q_exp_fit(dw1: u64, dw0: u64, q_exp: i32) -> bool {
         return false;
     }
     // at most 113 bits is necessarily below 10^34, since 2^113 > 10^34
-    if clz64(dw1) > 128 - 113 {
+    if dw1.leading_zeros() > 128 - 113 {
         return true;
     }
     dw1 < MAXX_COEFF_34_HI || (dw1 == MAXX_COEFF_34_HI && dw0 < MAXX_COEFF_34_LO)
@@ -2033,7 +2017,7 @@ fn parse_finite_value_text(
      * corrections land here.
      */
     let signed_exp = if exp_sign { -exp } else { exp };
-    let excess_digits = significant_digit_count.saturating_sub(34);
+    let excess_digits = significant_digit_count.max(34) - 34;
     let q_exp = signed_exp - fractional_digit_count as i32 + excess_digits as i32;
     Ok(round_and_finalize_finite(
         format_is_bid,
