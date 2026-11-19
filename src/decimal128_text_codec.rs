@@ -1041,13 +1041,13 @@ fn u128_to_ascii(digit_print_count: usize, dw1: u64, dw0: u64, ascii: &mut [u8],
 
 /// Write a signed decimal exponent at `off`, returning its length. The magnitude never exceeds
 /// 6176, so it is at most four digits.
-fn append_int(out: &mut [u8], v: i32) -> usize {
+fn append_int(out: &mut [u8], off: usize, v: i32) -> usize {
     // core has no integer-to-bytes helper, and routing this through fmt would pull the
     // formatting machinery into the render path for one call site.
     let mut sign_len = 0;
     let mut magnitude = v;
     if v < 0 {
-        out[0] = b'-';
+        out[off] = b'-';
         sign_len = 1;
         magnitude = -v;
     }
@@ -1060,7 +1060,7 @@ fn append_int(out: &mut [u8], v: i32) -> usize {
     } else {
         1
     };
-    render_tail_digits_before_index(digit_len, magnitude as u64, out, sign_len + digit_len);
+    render_tail_digits_before_index(digit_len, magnitude as u64, out, off + sign_len + digit_len);
     sign_len + digit_len
 }
 
@@ -1132,7 +1132,7 @@ fn zer_ascii(out: &mut [u8], sign: bool, q_exp: i32) -> usize {
     out[0] = b'-'; // overwritten by the b'0' when unsigned
     out[sign_len..sign_len + word_len].copy_from_slice(ZERO_EXP_TEXT);
     out[sign_len + word_len] = b'+'; // overwritten by append_int's b'-' when q_exp < 0
-    base_len + append_int(&mut out[base_len..], q_exp)
+    base_len + append_int(out, base_len, q_exp)
 }
 
 /// Format a finite non-zero value with qExp == 0 as a plain integer sequence: no radix point,
